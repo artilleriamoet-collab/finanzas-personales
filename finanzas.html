@@ -759,7 +759,7 @@ async function renderMovimientos() {
   const mes=(document.getElementById('filter-mes')||{value:''}).value;
   const catSel=document.getElementById('filter-cat');
   if(catSel){const pv=catSel.value;catSel.innerHTML='<option value="">Todas</option>'+CFG.categorias.map(c=>`<option>${c}</option>`).join('');catSel.value=pv;}
-  let list=await db.movimientos.orderBy('createdAt').reverse().toArray();
+  let list=(await db.movimientos.toArray()).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
   if(search) list=list.filter(m=>m.desc.toLowerCase().includes(search)||(m.tags||[]).join(' ').toLowerCase().includes(search));
   if(tipo) list=list.filter(m=>m.tipo===tipo);
   if(cat) list=list.filter(m=>m.cat===cat);
