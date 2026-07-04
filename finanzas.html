@@ -876,13 +876,30 @@ function renderChartCat(movMes) {
 async function fetchDolar() {
   const el = document.getElementById('dash-dolar-content');
   try {
-    const res = await fetch('https://dolarapi.com/v1/dolares');
-    if(!res.ok) throw new Error('HTTP '+res.status);
-    const data = await res.json();
+    const [resDolar, resUsdt] = await Promise.all([
+      fetch('https://dolarapi.com/v1/dolares'),
+      fetch('https://criptoya.com/api/binance/usdt/ars')
+    ]);
+    if(!resDolar.ok) throw new Error('HTTP '+resDolar.status);
+    const data = await resDolar.json();
     const tipos = ['oficial','blue','bolsa','tarjeta'];
     const nombres = {oficial:'Oficial',blue:'Blue / Informal',bolsa:'MEP / Bolsa',tarjeta:'Tarjeta'};
     const rows = data.filter(d=>tipos.includes(d.casa)).sort((a,b)=>tipos.indexOf(a.casa)-tipos.indexOf(b.casa));
-    el.innerHTML = rows.map((d,i)=>`
+    let usdtRow = '';
+    if(resUsdt.ok) {
+      const usdt = await resUsdt.json();
+      const bid = usdt.bid ? Number(usdt.bid).toLocaleString('es-AR') : '—';
+      const ask = usdt.ask ? Number(usdt.ask).toLocaleString('es-AR') : '—';
+      usdtRow = `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)">
+        <span style="font-size:13px;font-weight:500;color:var(--text)">🔶 USDT (Binance)</span>
+        <span style="display:flex;gap:12px;font-size:13px">
+          <span><span class="text-muted" style="font-size:11px">Compra </span><span class="amount-pos">$${bid}</span></span>
+          <span><span class="text-muted" style="font-size:11px">Venta </span><span class="amount-neg">$${ask}</span></span>
+        </span>
+      </div>`;
+    }
+    el.innerHTML = usdtRow + rows.map((d,i)=>`
       <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;${i<rows.length-1?'border-bottom:1px solid var(--border)':''}">
         <span style="font-size:13px;font-weight:500;color:var(--text)">${nombres[d.casa]||d.nombre}</span>
         <span style="display:flex;gap:12px;font-size:13px">
