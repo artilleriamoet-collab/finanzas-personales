@@ -144,9 +144,28 @@ License: MIT
   .milestone:last-child{border-bottom:none;}
   .milestone-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
   @media(max-width:900px){.cols-4{grid-template-columns:repeat(2,1fr);}.cols-3{grid-template-columns:repeat(2,1fr);}.cols-1-2,.cols-2-1{grid-template-columns:1fr;}}
+  #security-gate{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;align-items:center;justify-content:center;}
+  #gate-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:40px 32px;max-width:340px;width:100%;text-align:center;box-shadow:0 8px 32px #0008;}
+  #gate-pin{background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:28px;letter-spacing:10px;text-align:center;padding:12px;width:100%;margin-bottom:14px;outline:none;}
+  #gate-pin:focus{border-color:var(--accent);}
+  #gate-error{color:var(--red);font-size:13px;margin-bottom:10px;min-height:18px;}
 </style>
 </head>
 <body>
+
+<!-- PIN GATE -->
+<div id="security-gate">
+  <div id="gate-card">
+    <div style="font-size:52px;margin-bottom:12px">🔐</div>
+    <div style="font-size:22px;font-weight:800;margin-bottom:6px">FinanceOS</div>
+    <div id="gate-sub" class="text-muted text-sm" style="margin-bottom:24px">Ingresá tu PIN de acceso</div>
+    <input id="gate-pin" type="password" inputmode="numeric" maxlength="6" placeholder="• • • • • •" autocomplete="off">
+    <div id="gate-error"></div>
+    <button id="gate-btn" class="btn btn-primary" style="width:100%;margin-bottom:12px" onclick="handleGate()">Entrar</button>
+    <div id="gate-forgot"><button class="btn btn-ghost btn-sm" style="color:var(--text3);font-size:11px" onclick="resetApp()">Olvidé mi PIN (borra todos los datos)</button></div>
+  </div>
+</div>
+
 <div class="app">
 
 <!-- SIDEBAR -->
@@ -170,6 +189,7 @@ License: MIT
   <div class="nav-item" data-page="importar" onclick="navTo('importar')"><span class="icon">📂</span> Importar CSV</div>
   <div class="nav-section">Sistema</div>
   <div class="nav-item" data-page="config" onclick="navTo('config')"><span class="icon">⚙️</span> Config</div>
+  <div class="nav-item" style="margin-top:auto;border-top:1px solid var(--border);padding-top:12px;color:var(--text3)" onclick="lockApp()"><span class="icon">🔒</span> Bloquear</div>
 </nav>
 
 <!-- MAIN -->
@@ -639,6 +659,81 @@ License: MIT
 </div>
 
 <script>
+// ─── SEGURIDAD — PIN GATE ─────────────────────────────────────────────────────
+async function hashPin(pin) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('fos_' + pin));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+async function initSecurity() {
+  const gate = document.getElementById('security-gate');
+  const stored = localStorage.getItem('_fp');
+  if (!stored) {
+    document.getElementById('gate-sub').textContent = 'Creá un PIN de 4–6 dígitos para proteger tu app';
+    document.getElementById('gate-btn').textContent = 'Crear PIN';
+    document.getElementById('gate-forgot').style.display = 'none';
+    gate._mode = 'create';
+  } else {
+    gate._mode = 'login';
+  }
+  document.getElementById('gate-pin').addEventListener('keydown', e => { if (e.key === 'Enter') handleGate(); });
+  document.getElementById('gate-pin').focus();
+}
+async function handleGate() {
+  const gate = document.getElementById('security-gate');
+  const pin = document.getElementById('gate-pin').value;
+  const errEl = document.getElementById('gate-error');
+  errEl.textContent = '';
+  if (pin.length < 4) { errEl.textContent = 'Mínimo 4 dígitos'; return; }
+  const hash = await hashPin(pin);
+  if (gate._mode === 'create') {
+    localStorage.setItem('_fp', hash);
+    gate.style.display = 'none';
+    init();
+  } else {
+    if (hash === localStorage.getItem('_fp')) {
+      gate.style.display = 'none';
+      init();
+    } else {
+      errEl.textContent = 'PIN incorrecto';
+      document.getElementById('gate-pin').value = '';
+      document.getElementById('gate-pin').focus();
+    }
+  }
+}
+function lockApp() {
+  document.getElementById('security-gate').style.display = 'flex';
+  document.getElementById('gate-pin').value = '';
+  document.getElementById('gate-error').textContent = '';
+  document.getElementById('gate-pin').focus();
+}
+function resetApp() {
+  if (!confirm('⚠️ Esto borrará tu PIN y TODOS tus datos. ¿Seguro?')) return;
+  localStorage.clear();
+  indexedDB.deleteDatabase('FinanceOS');
+  location.reload();
+}
+
+// ─── CLAUDE API — PROXY SEGURO ────────────────────────────────────────────────
+async function callClaude(body) {
+  // Intenta el proxy server-side (key nunca expuesta en el browser)
+  try {
+    const res = await fetch('/api/claude', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (res.status !== 503) return res.json();
+  } catch (e) { /* proxy no disponible, intentar directo */ }
+  // Fallback: key del usuario configurada en la app
+  const key = getApiKey();
+  if (!key) throw new Error('no-key');
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'anthropic-dangerous-direct-browser-calls': 'true' },
+    body: JSON.stringify(body)
+  });
+  return res.json();
+}
+
 // ─── DEXIE (IndexedDB) ────────────────────────────────────────────────────────
 const db = new Dexie('FinanceOS');
 db.version(1).stores({
@@ -877,8 +972,8 @@ async function fetchDolar() {
   const el = document.getElementById('dash-dolar-content');
   try {
     const [resDolar, resUsdt] = await Promise.all([
-      fetch('https://dolarapi.com/v1/dolares'),
-      fetch('https://criptoya.com/api/binance/usdt/ars')
+      fetch('/api/dolar'),
+      fetch('/api/usdt')
     ]);
     if(!resDolar.ok) throw new Error('HTTP '+resDolar.status);
     const data = await resDolar.json();
@@ -1221,13 +1316,12 @@ function appendMsg(text,role){const div=document.getElementById('ai-messages');c
 async function sendAI(){const inp=document.getElementById('ai-input');const msg=inp.value.trim();if(!msg)return;inp.value='';appendMsg(msg,'user');await callAI(msg);}
 function quickAI(msg){navTo('ia');setTimeout(async()=>{appendMsg(msg,'user');await callAI(msg);},150);}
 async function callAI(userMsg){
-  const key=getApiKey();if(!key){appendMsg('⚠️ Configurá tu API key de Anthropic en esta sección.','bot');return;}
   const loadEl=appendMsg('⏳ Analizando...','bot');
   try{
     const ctx=await buildContext();
-    const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'x-api-key':key,'anthropic-version':'2023-06-01','content-type':'application/json','anthropic-dangerous-direct-browser-calls':'true'},body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:1500,system:`Sos un asesor financiero personal experto en el mercado argentino. Conocés FCI, CEDEARs, plazos fijos, cauciones, billeteras virtuales (Mercado Pago, Ualá, Naranja X), etc. Respondés en español rioplatense, de forma concreta y amigable. No usás disclaimers. Datos actuales:\n\n${ctx}`,messages:[{role:'user',content:userMsg}]})});
-    const data=await resp.json();loadEl.textContent=data.content?.[0]?.text||'Error.';
-  }catch(e){loadEl.textContent='Error: '+e.message;}
+    const data=await callClaude({model:'claude-haiku-4-5-20251001',max_tokens:1500,system:`Sos un asesor financiero personal experto en el mercado argentino. Conocés FCI, CEDEARs, plazos fijos, cauciones, billeteras virtuales (Mercado Pago, Ualá, Naranja X), etc. Respondés en español rioplatense, de forma concreta y amigable. No usás disclaimers. Datos actuales:\n\n${ctx}`,messages:[{role:'user',content:userMsg}]});
+    loadEl.textContent=data.content?.[0]?.text||'Error.';
+  }catch(e){loadEl.textContent=e.message==='no-key'?'⚠️ Configurá tu API key en esta sección o en las variables de entorno de Vercel.':'Error: '+e.message;}
   document.getElementById('ai-messages').scrollTop=99999;
 }
 
@@ -1424,20 +1518,15 @@ async function planIAObjetivo(id) {
       </div>
     </div>
     <div id="obj-ia-result">
-      ${getApiKey() ? `<div style="text-align:center;padding:20px;color:var(--text3)">⏳ Generando plan con IA...</div>` : `<div class="info-box" style="border-left-color:var(--yellow)">💡 Configurá tu API key en <strong>Asistente IA</strong> para obtener un plan detallado y personalizado.</div>`}
+      <div style="text-align:center;padding:20px;color:var(--text3)">⏳ Generando plan con IA...</div>
     </div>`;
-
-  if(!getApiKey()) return;
 
   const ctx = await buildContext();
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method:'POST',
-      headers:{'x-api-key':getApiKey(),'anthropic-version':'2023-06-01','content-type':'application/json','anthropic-dangerous-direct-browser-calls':'true'},
-      body: JSON.stringify({
-        model:'claude-haiku-4-5-20251001', max_tokens:2000,
-        system:`Sos un asesor financiero personal experto en el mercado argentino. Respondés en español rioplatense, de forma concreta, práctica y sin vueltas. Conocés FCI, CEDEARs, plazos fijos UVA, cauciones, dólar MEP, Mercado Pago, Ualá, Naranja X, etc. Sin disclaimers. Datos financieros del usuario:\n\n${ctx}`,
-        messages:[{role:'user',content:`Tengo este objetivo financiero:
+    const data = await callClaude({
+      model:'claude-haiku-4-5-20251001', max_tokens:2000,
+      system:`Sos un asesor financiero personal experto en el mercado argentino. Respondés en español rioplatense, de forma concreta, práctica y sin vueltas. Conocés FCI, CEDEARs, plazos fijos UVA, cauciones, dólar MEP, Mercado Pago, Ualá, Naranja X, etc. Sin disclaimers. Datos financieros del usuario:\n\n${ctx}`,
+      messages:[{role:'user',content:`Tengo este objetivo financiero:
 - Objetivo: ${o.emoji||''} ${o.nombre}
 - Monto total: ${fmt(o.monto)}
 - Ya acumulé: ${fmt(o.ahorroActual||0)}
@@ -1455,12 +1544,10 @@ Armame un plan completo. Incluí:
 5. Hitos: cuánto debería tener cada 6 meses
 6. Si no llego a aportar algún mes, ¿qué hago?
 7. Un plan B si el plazo se extiende`}]
-      })
     });
-    const data = await resp.json();
     document.getElementById('obj-ia-result').innerHTML = `<div class="info-box" style="border-left-color:var(--accent);white-space:pre-wrap;font-size:13px;line-height:1.8;max-height:400px;overflow-y:auto">${data.content?.[0]?.text||'Error al generar el plan.'}</div>`;
   } catch(e) {
-    document.getElementById('obj-ia-result').innerHTML = `<div class="badge badge-red">Error: ${e.message}</div>`;
+    document.getElementById('obj-ia-result').innerHTML = `<div class="badge badge-red">Error: ${e.message==='no-key'?'Configurá tu API key en Asistente IA o en las variables de entorno de Vercel.':e.message}</div>`;
   }
 }
 
@@ -1596,7 +1683,7 @@ async function init(){
   const fm=document.getElementById('filter-mes');if(fm)fm.value=thisMonth();
   await Promise.all([renderDashboard(),autoSnapshot()]);
 }
-init();
+initSecurity();
 </script>
 </body>
 </html>
