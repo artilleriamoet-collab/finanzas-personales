@@ -144,6 +144,25 @@ License: MIT
   .milestone:last-child{border-bottom:none;}
   .milestone-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
   @media(max-width:900px){.cols-4{grid-template-columns:repeat(2,1fr);}.cols-3{grid-template-columns:repeat(2,1fr);}.cols-1-2,.cols-2-1{grid-template-columns:1fr;}}
+  /* ─── Mobile ─── */
+  #menu-toggle{display:none;position:fixed;top:14px;left:14px;z-index:60;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:8px 12px;font-size:18px;cursor:pointer;line-height:1;}
+  #sidebar-backdrop{display:none;position:fixed;inset:0;background:#000a;z-index:40;}
+  @media(max-width:768px){
+    #menu-toggle{display:block;}
+    .sidebar{transform:translateX(-100%);transition:transform .25s ease;width:240px;z-index:50;}
+    .sidebar.open{transform:translateX(0);box-shadow:8px 0 32px #000a;}
+    #sidebar-backdrop.show{display:block;}
+    .main{margin-left:0;padding:64px 12px 24px;}
+    .cols-4,.cols-3,.cols-2{grid-template-columns:1fr;}
+    .page-header{flex-direction:column;align-items:flex-start;gap:12px;}
+    .card{padding:14px;}
+    .card-value{font-size:22px;}
+    .nw-big{font-size:26px;}
+    .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+    table{min-width:560px;}
+    .modal{width:94vw;max-height:88vh;overflow-y:auto;}
+    .ai-messages{max-height:50vh;}
+  }
   #security-gate{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;align-items:center;justify-content:center;}
   #gate-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:40px 32px;max-width:340px;width:100%;text-align:center;box-shadow:0 8px 32px #0008;}
   #gate-pin{background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:28px;letter-spacing:10px;text-align:center;padding:12px;width:100%;margin-bottom:14px;outline:none;}
@@ -168,8 +187,11 @@ License: MIT
 
 <div class="app">
 
+<button id="menu-toggle" onclick="toggleSidebar()">☰</button>
+<div id="sidebar-backdrop" onclick="toggleSidebar(false)"></div>
+
 <!-- SIDEBAR -->
-<nav class="sidebar">
+<nav class="sidebar" id="sidebar">
   <div class="logo">FinanceOS <span>v2 · Dexie + PapaParse + IA</span></div>
   <div class="nav-section">Principal</div>
   <div class="nav-item active" data-page="dashboard" onclick="navTo('dashboard')"><span class="icon">📊</span> Dashboard</div>
@@ -795,6 +817,14 @@ function navTo(page) {
   document.querySelectorAll('[data-page="'+page+'"]').forEach(n=>n.classList.add('active'));
   const fns = {dashboard:renderDashboard,movimientos:renderMovimientos,tarjetas:renderTarjetas,inversiones:renderInversiones,liquidez:renderLiquidez,prestamos:renderPrestamos,presupuestos:renderPresupuestos,objetivos:renderObjetivos,analisis:renderAnalisis,ia:renderIA,importar:renderImportar,config:renderConfig};
   fns[page] && fns[page]();
+  toggleSidebar(false);
+}
+function toggleSidebar(force) {
+  const sb = document.getElementById('sidebar');
+  const bd = document.getElementById('sidebar-backdrop');
+  const open = force !== undefined ? force : !sb.classList.contains('open');
+  sb.classList.toggle('open', open);
+  bd.classList.toggle('show', open);
 }
 
 // ─── MODAL ───────────────────────────────────────────────────────────────────
@@ -968,8 +998,16 @@ function renderChartCat(movMes) {
   if(chartCat) chartCat.destroy();
   chartCat=new Chart(ctx,{type:'doughnut',data:{labels:lbls,datasets:[{data,backgroundColor:cols.slice(0,lbls.length),borderWidth:0}]},options:{plugins:{legend:{position:'right',labels:{color:'#94a3b8',font:{size:11}}}},cutout:'65%',responsive:true,maintainAspectRatio:false,animation:false}});
 }
+let dolarTimer = null;
+function startDolarAutoRefresh() {
+  if (dolarTimer) return;
+  dolarTimer = setInterval(() => {
+    if (document.getElementById('page-dashboard').classList.contains('active') && !document.hidden) fetchDolar();
+  }, 60000);
+}
 async function fetchDolar() {
   const el = document.getElementById('dash-dolar-content');
+  startDolarAutoRefresh();
   try {
     const [resDolar, resUsdt] = await Promise.all([
       fetch('/api/dolar'),
