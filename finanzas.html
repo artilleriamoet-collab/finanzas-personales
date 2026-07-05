@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>FinanceOS</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#6c63ff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="FinanceOS">
+<link rel="apple-touch-icon" href="/icon.svg">
 <!-- Chart.js -->
 <script>/**
  * Skipped minification because the original files appears to be already minified.
@@ -249,6 +255,7 @@ License: MIT
     <div class="card"><div class="section-header"><span class="section-title">Inversiones</span><span class="badge badge-blue" id="dash-inv-total">$0</span></div><div id="dash-inv-list"></div></div>
     <div class="card"><div class="section-header"><span class="section-title">Liquidez</span><span class="badge badge-green" id="dash-liq-total">$0</span></div><div id="dash-liq-list"></div></div>
   </div>
+  <div id="dash-vencimientos-alert" class="mt-16"></div>
   <div id="dash-presupuestos-alert" class="mt-16"></div>
   <div id="dash-objetivos-wrap" class="mt-16"></div>
   <div id="dash-score-wrap" class="mt-16"></div>
@@ -969,6 +976,7 @@ async function renderDashboard() {
   } else { wrap.innerHTML=''; }
   renderChartCat(movMes);
   renderMotivacional(objs, ingresos - egresos);
+  renderVencimientos(tarjetas, prestamos);
   fetchDolar();
   // Score en dashboard
   const sd=await calcScore({allMov,liq:liquidez,inv:inversiones,tc:tarjetas,prest:prestamos});
@@ -988,6 +996,61 @@ async function renderDashboard() {
         <button class="btn btn-ghost btn-sm" onclick="navTo('analisis')">Ver análisis completo →</button>
       </div>
     </div>`;
+}
+
+function renderVencimientos(tarjetas, prestamos) {
+  const el = document.getElementById('dash-vencimientos-alert');
+  const hoy = new Date();
+  const diaHoy = hoy.getDate();
+  const alerts = [];
+  tarjetas.forEach(t => {
+    if(!t.vencimiento) return;
+    const diasRestantes = ((t.vencimiento - diaHoy) + 31) % 31;
+    if(diasRestantes <= 5) {
+      const urgente = diasRestantes <= 2;
+      alerts.push({
+        tipo: urgente ? 'red' : 'yellow',
+        icono: '💳',
+        msg: `<strong>${t.nombre}</strong> — vence ${diasRestantes === 0 ? 'HOY' : `en ${diasRestantes} día${diasRestantes>1?'s':''}`}`,
+        sub: `Deuda: ${fmt(t.saldo || 0)}`
+      });
+    }
+    if(t.cierre) {
+      const diasCierre = ((t.cierre - diaHoy) + 31) % 31;
+      if(diasCierre <= 3) {
+        alerts.push({
+          tipo: 'blue',
+          icono: '📅',
+          msg: `<strong>${t.nombre}</strong> — cierra ${diasCierre === 0 ? 'HOY' : `en ${diasCierre} día${diasCierre>1?'s':''}`}`,
+          sub: 'Evitá nuevos gastos antes del cierre'
+        });
+      }
+    }
+  });
+  prestamos.forEach(p => {
+    const cuotaMens = pmt(p.tna, p.cuotas, p.monto);
+    if(cuotaMens > 0 && p.diaPago) {
+      const diasPago = ((p.diaPago - diaHoy) + 31) % 31;
+      if(diasPago <= 4) {
+        alerts.push({
+          tipo: diasPago <= 1 ? 'red' : 'yellow',
+          icono: '🏦',
+          msg: `<strong>${p.nombre}</strong> — cuota ${diasPago === 0 ? 'HOY' : `en ${diasPago} día${diasPago>1?'s':''}`}`,
+          sub: `${fmt(cuotaMens)}/mes · ${p.cuotas - (p.pagadas||0)} cuotas restantes`
+        });
+      }
+    }
+  });
+  if(!alerts.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="card" style="border-left:4px solid var(--yellow);padding:14px 18px">
+    <div class="section-title" style="margin-bottom:10px">⚠️ Próximos vencimientos</div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      ${alerts.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:var(--surface2);border-radius:8px;border-left:3px solid var(--${a.tipo})">
+        <span style="font-size:13px">${a.icono} ${a.msg}</span>
+        <span class="text-xs text-muted">${a.sub}</span>
+      </div>`).join('')}
+    </div>
+  </div>`;
 }
 
 function renderChartCat(movMes) {
@@ -1032,6 +1095,9 @@ async function fetchDolar() {
         </span>
       </div>`;
     }
+    // Actualizar cotización en vivo para toARS() — usa blue como referencia
+    const blue = rows.find(d=>d.casa==='blue');
+    if(blue && blue.venta) { liveUSD = blue.venta; refreshDashboard(); }
     el.innerHTML = usdtRow + rows.map((d,i)=>`
       <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;${i<rows.length-1?'border-bottom:1px solid var(--border)':''}">
         <span style="font-size:13px;font-weight:500;color:var(--text)">${nombres[d.casa]||d.nombre}</span>
@@ -1161,7 +1227,14 @@ async function renderInversiones() {
 }
 
 // ─── LIQUIDEZ ─────────────────────────────────────────────────────────────────
-function toARS(monto,moneda){if(moneda==='ARS')return monto;if(moneda==='USD'||moneda==='USDT')return monto*(CFG.usd||1000);if(moneda==='EUR')return monto*(CFG.usd||1000)*1.08;return monto;}
+let liveUSD = 0; // se actualiza con fetchDolar()
+function toARS(monto,moneda){
+  const rate = liveUSD || CFG.usd || 1000;
+  if(moneda==='ARS')return monto;
+  if(moneda==='USD'||moneda==='USDT')return monto*rate;
+  if(moneda==='EUR')return monto*rate*1.08;
+  return monto;
+}
 async function guardarLiquidez(){
   const editId = document.getElementById('liq-edit-id').value;
   const l={nombre:document.getElementById('liq-nombre').value.trim(),tipo:document.getElementById('liq-tipo').value,saldo:parseFloat(document.getElementById('liq-saldo').value)||0,moneda:document.getElementById('liq-moneda').value};
@@ -1721,6 +1794,7 @@ async function init(){
   const fm=document.getElementById('filter-mes');if(fm)fm.value=thisMonth();
   await Promise.all([renderDashboard(),autoSnapshot()]);
 }
+if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
 initSecurity();
 </script>
 </body>

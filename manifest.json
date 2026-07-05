@@ -1,0 +1,13 @@
+{
+  "name": "FinanceOS",
+  "short_name": "FinanceOS",
+  "description": "Finanzas personales inteligentes",
+  "start_url": "/finanzas.html",
+  "display": "standalone",
+  "background_color": "#0f1117",
+  "theme_color": "#6c63ff",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
