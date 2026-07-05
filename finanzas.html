@@ -271,6 +271,7 @@ License: MIT
   <div class="page-header">
     <div><div class="page-title">Movimientos</div><div class="page-sub">Ingresos y egresos</div></div>
     <div class="flex gap-8">
+      <button class="btn btn-ghost btn-sm" onclick="openModal('modal-recurrentes')">↻ Recurrentes</button>
       <button class="btn btn-ghost btn-sm" onclick="exportarMovCSV()">⬇️ CSV</button>
       <button class="btn btn-primary" onclick="openModal('modal-movimiento')">+ Nuevo</button>
     </div>
@@ -687,6 +688,40 @@ License: MIT
   </div>
 </div>
 
+<!-- MODAL RECURRENTES -->
+<div class="modal-overlay" id="modal-recurrentes">
+  <div class="modal" style="max-width:600px">
+    <div class="modal-header">
+      <div class="modal-title">↻ Movimientos recurrentes</div>
+      <button class="modal-close" onclick="closeModal('modal-recurrentes')">×</button>
+    </div>
+    <div class="info-box" style="margin-bottom:16px;border-left-color:var(--accent)">
+      Se cargan automáticamente cada mes en el día que indiques, si aún no existen.
+    </div>
+    <div id="recurrentes-list" style="margin-bottom:16px"></div>
+    <div style="border-top:1px solid var(--border);padding-top:16px">
+      <div class="section-title" style="margin-bottom:12px" id="rec-form-title">Nuevo recurrente</div>
+      <div class="grid cols-2" style="gap:10px">
+        <div class="form-group" style="margin:0"><label class="form-label">Tipo</label>
+          <select class="form-input" id="rec-tipo"><option value="egreso">Egreso</option><option value="ingreso">Ingreso</option></select></div>
+        <div class="form-group" style="margin:0"><label class="form-label">Día del mes</label>
+          <input class="form-input" type="number" id="rec-dia" min="1" max="28" placeholder="1-28"></div>
+        <div class="form-group" style="margin:0"><label class="form-label">Descripción</label>
+          <input class="form-input" id="rec-desc" placeholder="Alquiler, Sueldo, Netflix..."></div>
+        <div class="form-group" style="margin:0"><label class="form-label">Monto</label>
+          <input class="form-input" type="number" id="rec-monto" placeholder="0"></div>
+        <div class="form-group" style="margin:0"><label class="form-label">Categoría</label>
+          <select class="form-input" id="rec-cat"></select></div>
+      </div>
+      <input type="hidden" id="rec-edit-id">
+      <div class="flex gap-8 mt-16">
+        <button class="btn btn-primary" onclick="guardarRecurrente()">Guardar</button>
+        <button class="btn btn-ghost" onclick="resetRecForm()">Cancelar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 // ─── SEGURIDAD — PIN GATE ─────────────────────────────────────────────────────
 async function hashPin(pin) {
@@ -780,6 +815,9 @@ db.version(2).stores({
 db.version(3).stores({
   objetivos: '++id'
 });
+db.version(4).stores({
+  recurrentes: '++id'
+});
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 let CFG = {
@@ -842,6 +880,7 @@ function openModal(id) {
     renderMovCats();
   }
   if(id==='modal-presupuesto'){ renderPresCats(); }
+  if(id==='modal-recurrentes'){ renderRecurrentes(); }
 }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click',e=>{ if(e.target===m) m.classList.remove('open'); }));
@@ -1662,6 +1701,104 @@ Armame un plan completo. Incluí:
   }
 }
 
+// ─── RECURRENTES ─────────────────────────────────────────────────────────────
+async function autoCargarRecurrentes() {
+  const mes = thisMonth();
+  const diaHoy = new Date().getDate();
+  const lista = await db.recurrentes.toArray();
+  const activos = lista.filter(r => r.activo && r.dia <= diaHoy);
+  for (const r of activos) {
+    const yaExiste = await db.movimientos
+      .filter(m => m.recurrenteId === r.id && m.fecha && m.fecha.startsWith(mes))
+      .first();
+    if (!yaExiste) {
+      const dia = String(r.dia).padStart(2, '0');
+      await db.movimientos.add({
+        tipo: r.tipo, desc: r.desc, monto: r.monto, cat: r.cat,
+        fecha: `${mes}-${dia}`, tags: ['recurrente'],
+        notas: '↻ Cargado automáticamente', recurrenteId: r.id,
+        createdAt: Date.now()
+      });
+    }
+  }
+}
+
+async function renderRecurrentes() {
+  const lista = await db.recurrentes.toArray();
+  const el = document.getElementById('recurrentes-list');
+  // Populate cat select
+  const catSel = document.getElementById('rec-cat');
+  catSel.innerHTML = CFG.categorias.map(c => `<option>${c}</option>`).join('');
+  if (!lista.length) {
+    el.innerHTML = '<div class="text-muted text-sm" style="padding:8px 0">Sin recurrentes. Agregá uno abajo.</div>';
+    return;
+  }
+  el.innerHTML = lista.map(r => `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface2);border-radius:8px;margin-bottom:6px;opacity:${r.activo?1:.45}">
+      <span style="font-size:18px">${r.tipo==='ingreso'?'💚':'🔴'}</span>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:600">${r.desc} <span class="badge ${r.tipo==='ingreso'?'badge-green':'badge-red'}">${r.tipo}</span></div>
+        <div class="text-xs text-muted">Día ${r.dia} · ${fmt(r.monto)} · ${r.cat||'Sin cat'}</div>
+      </div>
+      <button class="btn btn-ghost btn-sm btn-icon" title="${r.activo?'Pausar':'Activar'}" onclick="toggleRecurrente(${r.id})">${r.activo?'⏸':'▶'}</button>
+      <button class="btn btn-ghost btn-sm btn-icon" onclick="editarRecurrente(${r.id})">✏️</button>
+      <button class="btn btn-ghost btn-sm btn-icon" onclick="eliminarRecurrente(${r.id})">🗑</button>
+    </div>`).join('');
+}
+
+async function guardarRecurrente() {
+  const editId = document.getElementById('rec-edit-id').value;
+  const obj = {
+    tipo: document.getElementById('rec-tipo').value,
+    dia: parseInt(document.getElementById('rec-dia').value) || 1,
+    desc: document.getElementById('rec-desc').value.trim(),
+    monto: parseFloat(document.getElementById('rec-monto').value) || 0,
+    cat: document.getElementById('rec-cat').value,
+    activo: true
+  };
+  if (!obj.desc || !obj.monto) return alert('Completá descripción y monto.');
+  if (obj.dia < 1 || obj.dia > 28) return alert('El día debe ser entre 1 y 28.');
+  if (editId) {
+    await db.recurrentes.update(parseInt(editId), obj);
+  } else {
+    obj.createdAt = Date.now();
+    await db.recurrentes.add(obj);
+  }
+  resetRecForm();
+  renderRecurrentes();
+}
+
+async function editarRecurrente(id) {
+  const r = await db.recurrentes.get(id); if (!r) return;
+  document.getElementById('rec-edit-id').value = id;
+  document.getElementById('rec-tipo').value = r.tipo;
+  document.getElementById('rec-dia').value = r.dia;
+  document.getElementById('rec-desc').value = r.desc;
+  document.getElementById('rec-monto').value = r.monto;
+  document.getElementById('rec-cat').value = r.cat || '';
+  document.getElementById('rec-form-title').textContent = 'Editar recurrente';
+}
+
+async function toggleRecurrente(id) {
+  const r = await db.recurrentes.get(id); if (!r) return;
+  await db.recurrentes.update(id, { activo: !r.activo });
+  renderRecurrentes();
+}
+
+async function eliminarRecurrente(id) {
+  if (!confirm('¿Eliminar este recurrente? Los movimientos ya cargados no se borran.')) return;
+  await db.recurrentes.delete(id);
+  renderRecurrentes();
+}
+
+function resetRecForm() {
+  document.getElementById('rec-edit-id').value = '';
+  document.getElementById('rec-desc').value = '';
+  document.getElementById('rec-monto').value = '';
+  document.getElementById('rec-dia').value = '';
+  document.getElementById('rec-form-title').textContent = 'Nuevo recurrente';
+}
+
 // ─── SNAPSHOTS ───────────────────────────────────────────────────────────────
 async function autoSnapshot() {
   const mes = thisMonth();
@@ -1792,6 +1929,7 @@ async function renderAnalisis() {
 async function init(){
   await loadConfig();
   const fm=document.getElementById('filter-mes');if(fm)fm.value=thisMonth();
+  await autoCargarRecurrentes();
   await Promise.all([renderDashboard(),autoSnapshot()]);
 }
 if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
