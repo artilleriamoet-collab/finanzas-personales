@@ -798,6 +798,7 @@ async function callClaude(body) {
     headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'anthropic-dangerous-direct-browser-calls': 'true' },
     body: JSON.stringify(body)
   });
+  if (!res.ok) { const err = await res.json().catch(()=>({})); throw new Error(err.error?.message || `HTTP ${res.status}`); }
   return res.json();
 }
 
@@ -934,7 +935,7 @@ async function renderMovimientos() {
   const catSel=document.getElementById('filter-cat');
   if(catSel){const pv=catSel.value;catSel.innerHTML='<option value="">Todas</option>'+CFG.categorias.map(c=>`<option>${c}</option>`).join('');catSel.value=pv;}
   let list=(await db.movimientos.toArray()).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
-  if(search) list=list.filter(m=>m.desc.toLowerCase().includes(search)||(m.tags||[]).join(' ').toLowerCase().includes(search));
+  if(search) list=list.filter(m=>(m.desc||'').toLowerCase().includes(search)||(m.tags||[]).join(' ').toLowerCase().includes(search));
   if(tipo) list=list.filter(m=>m.tipo===tipo);
   if(cat) list=list.filter(m=>m.cat===cat);
   if(mes) list=list.filter(m=>m.fecha&&m.fecha.startsWith(mes));
@@ -1052,12 +1053,12 @@ function renderAnomalias(allMov, targetId) {
     const d = new Date(hoy.getFullYear(), hoy.getMonth() - i, 1);
     mesesPrev.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);
   }
-  const gastos = allMov.filter(m => m.tipo === 'gasto');
+  const gastos = allMov.filter(m => m.tipo === 'egreso');
   // Agrupar por categoría y mes
   const porCatMes = {};
   for (const m of gastos) {
     const mes = (m.fecha||'').slice(0,7);
-    const cat = m.categoria || 'Sin categoría';
+    const cat = m.cat || 'Sin categoría';
     if (!porCatMes[cat]) porCatMes[cat] = {};
     porCatMes[cat][mes] = (porCatMes[cat][mes] || 0) + toARS(Math.abs(m.monto), m.moneda||'ARS');
   }
@@ -1174,7 +1175,7 @@ function renderVencimientos(tarjetas, prestamos) {
   prestamos.forEach(p => {
     const cuotaMens = pmt(p.tna, p.cuotas, p.monto);
     if(cuotaMens > 0 && p.diaPago) {
-      const diasPago = ((p.diaPago - diaHoy) + 31) % 31;
+      const diasPago = ((p.diaPago - diaHoy) + 30) % 30;
       if(diasPago <= 4) {
         alerts.push({
           tipo: diasPago <= 1 ? 'red' : 'yellow',
@@ -1438,9 +1439,10 @@ function previewCSV(event){
   const file=event.target.files[0];if(!file)return;
   Papa.parse(file,{header:true,skipEmptyLines:true,dynamicTyping:true,complete(r){
     _csvParsed=r.data;document.getElementById('csv-row-count').textContent=`${r.data.length} filas`;
-    document.getElementById('csv-preview-info').innerHTML=`<div class="info-box">Columnas: <strong>${r.meta.fields.join(', ')}</strong></div>`;
-    document.getElementById('csv-thead-row').innerHTML=r.meta.fields.map(f=>`<th>${f}</th>`).join('');
-    document.getElementById('csv-preview-tbody').innerHTML=r.data.slice(0,10).map(row=>`<tr>${r.meta.fields.map(f=>`<td>${row[f]??''}</td>`).join('')}</tr>`).join('');
+    const escHtml=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    document.getElementById('csv-preview-info').innerHTML=`<div class="info-box">Columnas: <strong>${r.meta.fields.map(escHtml).join(', ')}</strong></div>`;
+    document.getElementById('csv-thead-row').innerHTML=r.meta.fields.map(f=>`<th>${escHtml(f)}</th>`).join('');
+    document.getElementById('csv-preview-tbody').innerHTML=r.data.slice(0,10).map(row=>`<tr>${r.meta.fields.map(f=>`<td>${escHtml(row[f]??'')}</td>`).join('')}</tr>`).join('');
     document.getElementById('csv-import-btn').style.display='block';
   }});
 }
@@ -1546,7 +1548,7 @@ async function renderPresupuestos() {
 }
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
-async function renderConfig(){document.getElementById('cfg-moneda').value=CFG.moneda;document.getElementById('cfg-locale').value=CFG.locale;document.getElementById('cfg-usd').value=CFG.usd||1000;document.getElementById('cats-list').innerHTML=CFG.categorias.map(c=>`<span class="chip selected" onclick="removeCategoria('${c}')">${c} ×</span>`).join('');const cnt={mov:await db.movimientos.count(),tc:await db.tarjetas.count(),inv:await db.inversiones.count(),liq:await db.liquidez.count(),p:await db.prestamos.count(),obj:await db.objetivos.count(),snap:await db.snapshots.count()};document.getElementById('storage-info').innerHTML=`📦 <strong>IndexedDB activo</strong><br>Movimientos: ${cnt.mov} · Tarjetas: ${cnt.tc} · Inversiones: ${cnt.inv} · Liquidez: ${cnt.liq} · Préstamos: ${cnt.p} · Objetivos: ${cnt.obj} · Snapshots: ${cnt.snap}`;}
+async function renderConfig(){document.getElementById('cfg-moneda').value=CFG.moneda;document.getElementById('cfg-locale').value=CFG.locale;document.getElementById('cfg-usd').value=CFG.usd||1000;document.getElementById('cats-list').innerHTML=CFG.categorias.map(c=>`<span class="chip selected" onclick="removeCategoria(${JSON.stringify(c)})">${c.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')} ×</span>`).join('');const cnt={mov:await db.movimientos.count(),tc:await db.tarjetas.count(),inv:await db.inversiones.count(),liq:await db.liquidez.count(),p:await db.prestamos.count(),obj:await db.objetivos.count(),snap:await db.snapshots.count()};document.getElementById('storage-info').innerHTML=`📦 <strong>IndexedDB activo</strong><br>Movimientos: ${cnt.mov} · Tarjetas: ${cnt.tc} · Inversiones: ${cnt.inv} · Liquidez: ${cnt.liq} · Préstamos: ${cnt.p} · Objetivos: ${cnt.obj} · Snapshots: ${cnt.snap}`;}
 async function saveConfig(){CFG.moneda=document.getElementById('cfg-moneda').value;CFG.locale=document.getElementById('cfg-locale').value;CFG.usd=parseFloat(document.getElementById('cfg-usd').value)||1000;await saveConfigDB();}
 async function addCategoria(){const v=document.getElementById('cat-nueva').value.trim();if(v&&!CFG.categorias.includes(v)){CFG.categorias.push(v);await saveConfigDB();renderConfig();document.getElementById('cat-nueva').value='';}}
 async function removeCategoria(cat){CFG.categorias=CFG.categorias.filter(c=>c!==cat);await saveConfigDB();renderConfig();}

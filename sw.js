@@ -20,7 +20,7 @@ self.addEventListener('fetch', e => {
   if (url.pathname.startsWith('/api/') || url.pathname.endsWith('.html') || url.pathname === '/') {
     e.respondWith(fetch(e.request).catch(() =>
       url.pathname.endsWith('.html')
-        ? caches.match('/finanzas.html')  // fallback offline al último HTML cacheado
+        ? new Response('<h1 style="font-family:sans-serif;text-align:center;margin-top:20vh">Sin conexión — abrí la app cuando tengas internet.</h1>', {headers:{'content-type':'text/html'}})
         : new Response('{"error":"offline"}', {headers:{'content-type':'application/json'}})
     ));
     return;
