@@ -1244,7 +1244,7 @@ async function fetchDolar() {
     }
     // Actualizar cotización en vivo para toARS() — usa blue como referencia
     const blue = rows.find(d=>d.casa==='blue');
-    if(blue && blue.venta) { liveUSD = blue.venta; refreshDashboard(); }
+    if(blue && blue.venta) { liveUSD = blue.venta; }
     el.innerHTML = usdtRow + rows.map((d,i)=>`
       <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;${i<rows.length-1?'border-bottom:1px solid var(--border)':''}">
         <span style="font-size:13px;font-weight:500;color:var(--text)">${nombres[d.casa]||d.nombre}</span>
