@@ -586,6 +586,7 @@ License: MIT
       <div class="section-title" style="margin-bottom:16px">Exportar / Importar</div>
       <div class="flex gap-8 flex-wrap">
         <button class="btn btn-ghost" onclick="exportarJSON()">⬇️ Backup JSON</button>
+        <button class="btn btn-ghost" onclick="exportarExcel()">📊 Exportar Excel</button>
         <label class="btn btn-ghost" style="cursor:pointer">⬆️ Restaurar JSON<input type="file" accept=".json" style="display:none" onchange="importarJSON(event)"></label>
         <button class="btn btn-ghost" onclick="exportarMovCSV()">⬇️ Movimientos CSV</button>
       </div>
@@ -1875,6 +1876,51 @@ async function renderConfig(){document.getElementById('cfg-moneda').value=CFG.mo
 async function saveConfig(){CFG.moneda=document.getElementById('cfg-moneda').value;CFG.locale=document.getElementById('cfg-locale').value;CFG.usd=parseFloat(document.getElementById('cfg-usd').value)||1000;await saveConfigDB();}
 async function addCategoria(){const v=document.getElementById('cat-nueva').value.trim();if(v&&!CFG.categorias.includes(v)){CFG.categorias.push(v);await saveConfigDB();renderConfig();document.getElementById('cat-nueva').value='';}}
 async function removeCategoria(cat){CFG.categorias=CFG.categorias.filter(c=>c!==cat);await saveConfigDB();renderConfig();}
+async function exportarExcel() {
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = '⏳ Generando...';
+  try {
+    // Cargar SheetJS dinámicamente solo cuando se necesita
+    if (!window.XLSX) {
+      await new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+        s.onload = res; s.onerror = rej;
+        document.head.appendChild(s);
+      });
+    }
+    const [movs, tcs, invs, liqs, prest, objs] = await Promise.all([
+      db.movimientos.toArray(), db.tarjetas.toArray(), db.inversiones.toArray(),
+      db.liquidez.toArray(), db.prestamos.toArray(), db.objetivos.toArray()
+    ]);
+    const wb = XLSX.utils.book_new();
+    // Hoja: Movimientos
+    const movRows = movs.map(m => ({ Fecha: m.fecha||'', Tipo: m.tipo, Descripción: m.desc||'', Monto: m.monto, Categoría: m.cat||'', Etiquetas: (m.tags||[]).join(', '), Notas: m.notas||'' }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(movRows), 'Movimientos');
+    // Hoja: Tarjetas
+    const tcRows = tcs.map(t => ({ Nombre: t.nombre, Banco: t.banco, Dígitos: t.digitos||'', Deuda: t.saldo, Límite: t.limite, 'Día cierre': t.cierre, 'Día vence': t.vencimiento }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tcRows.length ? tcRows : [{}]), 'Tarjetas');
+    // Hoja: Inversiones
+    const invRows = invs.map(i => ({ Nombre: i.nombre, Tipo: i.tipo, 'Invertido': i.monto, 'Valor actual': i.actualVal||i.monto, 'Ganancia': (i.actualVal||i.monto)-i.monto, Fecha: i.fecha||'' }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(invRows.length ? invRows : [{}]), 'Inversiones');
+    // Hoja: Liquidez
+    const liqRows = liqs.map(l => ({ Nombre: l.nombre, Saldo: l.saldo, Moneda: l.moneda||'ARS' }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(liqRows.length ? liqRows : [{}]), 'Liquidez');
+    // Hoja: Préstamos
+    const prestRows = prest.map(p => ({ Nombre: p.nombre, Monto: p.monto, TNA: p.tna, Cuotas: p.cuotas, Pagadas: p.pagadas||0, 'Día pago': p.diaPago }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(prestRows.length ? prestRows : [{}]), 'Préstamos');
+    // Hoja: Objetivos
+    const objRows = objs.map(o => ({ Nombre: o.nombre, Meta: o.monto, Acumulado: o.ahorroActual||0, Plazo: o.plazo }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(objRows.length ? objRows : [{}]), 'Objetivos');
+    const fecha = new Date().toISOString().slice(0,10);
+    XLSX.writeFile(wb, `finanzas_${fecha}.xlsx`);
+  } catch(e) {
+    alert('Error al generar Excel: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '📊 Exportar Excel';
+  }
+}
+
 async function exportarJSON(){const data={movimientos:await db.movimientos.toArray(),tarjetas:await db.tarjetas.toArray(),inversiones:await db.inversiones.toArray(),liquidez:await db.liquidez.toArray(),prestamos:await db.prestamos.toArray(),objetivos:await db.objetivos.toArray(),config:CFG};const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='finanzas_backup.json';a.click();}
 async function importarJSON(e){const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=async ev=>{try{const data=JSON.parse(ev.target.result);const strip=arr=>arr.map(x=>({...x,id:undefined}));if(data.movimientos)await db.movimientos.bulkAdd(strip(data.movimientos));if(data.tarjetas)await db.tarjetas.bulkAdd(strip(data.tarjetas));if(data.inversiones)await db.inversiones.bulkAdd(strip(data.inversiones));if(data.liquidez)await db.liquidez.bulkAdd(strip(data.liquidez));if(data.prestamos)await db.prestamos.bulkAdd(strip(data.prestamos));if(data.objetivos)await db.objetivos.bulkAdd(strip(data.objetivos));if(data.config){Object.assign(CFG,data.config);await saveConfigDB();}alert('✅ Importado.');location.reload();}catch(err){alert('Error: '+err.message);}};reader.readAsText(file);}
 async function resetDatos(){await db.delete();location.reload();}
