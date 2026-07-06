@@ -19,8 +19,8 @@ self.addEventListener('fetch', e => {
   // API calls y HTML: siempre red, sin cache
   if (url.pathname.startsWith('/api/') || url.pathname.endsWith('.html') || url.pathname === '/') {
     e.respondWith(fetch(e.request).catch(() =>
-      url.pathname.endsWith('.html')
-        ? new Response('<h1 style="font-family:sans-serif;text-align:center;margin-top:20vh">Sin conexión — abrí la app cuando tengas internet.</h1>', {headers:{'content-type':'text/html'}})
+      (url.pathname.endsWith('.html') || url.pathname === '/')
+        ? new Response('<h1 style="font-family:sans-serif;text-align:center;margin-top:20vh">Sin conexi\xF3n — abr\xED la app cuando tengas internet.</h1>', {headers:{'content-type':'text/html; charset=utf-8'}})
         : new Response('{"error":"offline"}', {headers:{'content-type':'application/json'}})
     ));
     return;

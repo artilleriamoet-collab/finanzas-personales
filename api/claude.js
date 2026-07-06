@@ -19,7 +19,7 @@ module.exports = async (req, res) => {
       },
       body: JSON.stringify(req.body)
     });
-    const data = await upstream.json();
+    const data = await upstream.json().catch(() => ({ error: 'upstream_parse_error' }));
     res.status(upstream.status).json(data);
   } catch (e) {
     res.status(500).json({ error: e.message });

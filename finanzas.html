@@ -788,7 +788,7 @@ async function callClaude(body) {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body)
     });
-    if (res.status !== 503) return res.json();
+    if (res.status !== 503) { if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e.error?.message || `HTTP ${res.status}`); } return res.json(); }
   } catch (e) { /* proxy no disponible, intentar directo */ }
   // Fallback: key del usuario configurada en la app
   const key = getApiKey();
@@ -942,7 +942,8 @@ async function renderMovimientos() {
   document.getElementById('mov-count').textContent=list.length;
   document.getElementById('mov-total-filtrado').textContent=fmt(list.filter(m=>m.tipo==='egreso').reduce((s,m)=>s+m.monto,0));
   const tbody=document.getElementById('mov-tbody');
-  tbody.innerHTML=list.length?list.map(m=>`<tr><td>${m.fecha||''}</td><td>${m.desc}</td><td><span class="badge badge-blue">${m.cat||''}</span></td><td>${(m.tags||[]).map(t=>`<span class="chip">${t}</span>`).join('')}</td><td><span class="tag tag-${m.tipo}">${m.tipo}</span></td><td class="${m.tipo==='ingreso'?'amount-pos':'amount-neg'}">${m.tipo==='ingreso'?'+':'-'}${fmt(m.monto)}</td><td class="flex gap-8"><button class="btn btn-ghost btn-sm btn-icon" onclick="editarMovimiento(${m.id})">✏️</button><button class="btn btn-ghost btn-sm btn-icon" onclick="eliminarMovimiento(${m.id})">🗑</button></td></tr>`).join(''):`<tr><td colspan="7"><div class="empty-state"><div class="icon">📭</div>Sin movimientos</div></td></tr>`;
+  const escM=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  tbody.innerHTML=list.length?list.map(m=>`<tr><td>${escM(m.fecha||'')}</td><td>${escM(m.desc||'')}</td><td><span class="badge badge-blue">${escM(m.cat||'')}</span></td><td>${(m.tags||[]).map(t=>`<span class="chip">${escM(t)}</span>`).join('')}</td><td><span class="tag tag-${m.tipo}">${m.tipo}</span></td><td class="${m.tipo==='ingreso'?'amount-pos':'amount-neg'}">${m.tipo==='ingreso'?'+':'-'}${fmt(m.monto)}</td><td class="flex gap-8"><button class="btn btn-ghost btn-sm btn-icon" onclick="editarMovimiento(${m.id})">✏️</button><button class="btn btn-ghost btn-sm btn-icon" onclick="eliminarMovimiento(${m.id})">🗑</button></td></tr>`).join(''):`<tr><td colspan="7"><div class="empty-state"><div class="icon">📭</div>Sin movimientos</div></td></tr>`;
 }
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
@@ -1045,6 +1046,7 @@ async function renderDashboard() {
 function renderAnomalias(allMov, targetId) {
   const el = document.getElementById(targetId);
   if (!el) return;
+  const escH = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const hoy = new Date();
   const mesActual = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}`;
   // Calcular los 3 meses anteriores
@@ -1095,7 +1097,7 @@ function renderAnomalias(allMov, targetId) {
         <div style="display:flex;flex-direction:column;gap:8px">
           ${lista.map(a=>`
             <div class="flex items-center" style="justify-content:space-between;gap:8px;font-size:13px">
-              <span class="text-muted">${a.cat}</span>
+              <span class="text-muted">${escH(a.cat)}</span>
               <div style="text-align:right">
                 <span style="color:#f87171;font-weight:700">${fmt(a.actual)}</span>
                 <span class="text-muted" style="font-size:11px"> (+${Math.round((a.ratio-1)*100)}% vs promedio)</span>
@@ -1126,7 +1128,7 @@ function renderAnomalias(allMov, targetId) {
             <tbody>
               ${lista.map(a=>`
                 <tr style="border-bottom:1px solid rgba(255,255,255,.05)">
-                  <td style="padding:8px">${a.cat}</td>
+                  <td style="padding:8px">${escH(a.cat)}</td>
                   <td style="padding:8px;text-align:right;color:#f87171;font-weight:700">${fmt(a.actual)}</td>
                   <td style="padding:8px;text-align:right;color:var(--text-muted)">${fmt(a.promedio)}</td>
                   <td style="padding:8px;text-align:right;color:#f87171">+${fmt(a.diff)}</td>
@@ -1548,7 +1550,7 @@ async function renderPresupuestos() {
 }
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
-async function renderConfig(){document.getElementById('cfg-moneda').value=CFG.moneda;document.getElementById('cfg-locale').value=CFG.locale;document.getElementById('cfg-usd').value=CFG.usd||1000;document.getElementById('cats-list').innerHTML=CFG.categorias.map(c=>`<span class="chip selected" onclick="removeCategoria(${JSON.stringify(c)})">${c.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')} ×</span>`).join('');const cnt={mov:await db.movimientos.count(),tc:await db.tarjetas.count(),inv:await db.inversiones.count(),liq:await db.liquidez.count(),p:await db.prestamos.count(),obj:await db.objetivos.count(),snap:await db.snapshots.count()};document.getElementById('storage-info').innerHTML=`📦 <strong>IndexedDB activo</strong><br>Movimientos: ${cnt.mov} · Tarjetas: ${cnt.tc} · Inversiones: ${cnt.inv} · Liquidez: ${cnt.liq} · Préstamos: ${cnt.p} · Objetivos: ${cnt.obj} · Snapshots: ${cnt.snap}`;}
+async function renderConfig(){document.getElementById('cfg-moneda').value=CFG.moneda;document.getElementById('cfg-locale').value=CFG.locale;document.getElementById('cfg-usd').value=CFG.usd||1000;document.getElementById('cats-list').innerHTML=CFG.categorias.map(c=>{const s=c.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');return `<span class="chip selected" data-cat="${s}" onclick="removeCategoria(this.dataset.cat)">${s} ×</span>`;}).join('');const cnt={mov:await db.movimientos.count(),tc:await db.tarjetas.count(),inv:await db.inversiones.count(),liq:await db.liquidez.count(),p:await db.prestamos.count(),obj:await db.objetivos.count(),snap:await db.snapshots.count()};document.getElementById('storage-info').innerHTML=`📦 <strong>IndexedDB activo</strong><br>Movimientos: ${cnt.mov} · Tarjetas: ${cnt.tc} · Inversiones: ${cnt.inv} · Liquidez: ${cnt.liq} · Préstamos: ${cnt.p} · Objetivos: ${cnt.obj} · Snapshots: ${cnt.snap}`;}
 async function saveConfig(){CFG.moneda=document.getElementById('cfg-moneda').value;CFG.locale=document.getElementById('cfg-locale').value;CFG.usd=parseFloat(document.getElementById('cfg-usd').value)||1000;await saveConfigDB();}
 async function addCategoria(){const v=document.getElementById('cat-nueva').value.trim();if(v&&!CFG.categorias.includes(v)){CFG.categorias.push(v);await saveConfigDB();renderConfig();document.getElementById('cat-nueva').value='';}}
 async function removeCategoria(cat){CFG.categorias=CFG.categorias.filter(c=>c!==cat);await saveConfigDB();renderConfig();}
@@ -1729,15 +1731,16 @@ async function renderObjetivos() {
 let chartProyeccion = null;
 function renderProyeccion(list, allMov, flujoLibreActual) {
   const wrap = document.getElementById('obj-proyeccion-wrap');
+  if (!wrap) return;
   const activos = list.filter(o => (o.ahorroActual||0) < o.monto);
-  if (activos.length === 0) { wrap.innerHTML = ''; return; }
+  if (activos.length === 0) { wrap.innerHTML = ''; if (chartProyeccion) { chartProyeccion.destroy(); chartProyeccion = null; } return; }
 
   // Promedio flujo libre últimos 3 meses
   const hoy = new Date();
   let sumFlujo = 0, mesesCont = 0;
   for (let i = 1; i <= 3; i++) {
     const d = new Date(hoy.getFullYear(), hoy.getMonth() - i, 1);
-    const m = d.toISOString().slice(0, 7);
+    const m = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
     const mv = allMov.filter(x => x.fecha && x.fecha.startsWith(m));
     const ing = mv.filter(x=>x.tipo==='ingreso').reduce((s,x)=>s+x.monto,0);
     const egr = mv.filter(x=>x.tipo==='egreso').reduce((s,x)=>s+x.monto,0);
@@ -1752,17 +1755,18 @@ function renderProyeccion(list, allMov, flujoLibreActual) {
     return i === 0 ? 'Hoy' : d.toLocaleDateString('es-AR', {month:'short', year:'2-digit'});
   });
 
-  // Distribuir flujo disponible proporcionalmente entre objetivos activos
-  const totalMensualNec = activos.reduce((s,o) => {
+  const COLORS = ['#6c63ff','#4ade80','#f97316','#38bdf8','#f87171','#fbbf24'];
+  const datasets = [];
+  const resumen = [];
+  const visibles = activos.slice(0, 4);
+
+  // Proporción basada solo en los objetivos visibles
+  const totalMensualNec = visibles.reduce((s,o) => {
     const falta = o.monto - (o.ahorroActual||0);
     return s + falta / (o.meses || plazoMesesDefault(o.plazo));
   }, 0);
 
-  const COLORS = ['#6c63ff','#4ade80','#f97316','#38bdf8','#f87171','#fbbf24'];
-  const datasets = [];
-  const resumen = [];
-
-  activos.slice(0, 4).forEach((o, idx) => {
+  visibles.forEach((o, idx) => {
     const color = o.color || COLORS[idx % COLORS.length];
     const falta = o.monto - (o.ahorroActual||0);
     const mesesPlazo = o.meses || plazoMesesDefault(o.plazo);
