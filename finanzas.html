@@ -613,6 +613,10 @@ License: MIT
         <option value="var(--accent)">Violeta</option>
       </select>
     </div>
+    <div class="form-group" style="display:flex;align-items:center;gap:10px">
+      <input type="checkbox" id="pres-rollover" style="width:18px;height:18px;cursor:pointer">
+      <label for="pres-rollover" class="form-label" style="margin:0;cursor:pointer">Rollover — el sobrante/exceso pasa al mes siguiente</label>
+    </div>
     <input type="hidden" id="pres-edit-id">
     <div class="flex gap-8"><button class="btn btn-primary w-full" onclick="guardarPresupuesto()">Guardar</button><button class="btn btn-ghost" onclick="closeModal('modal-presupuesto')">Cancelar</button></div>
   </div>
@@ -1628,7 +1632,7 @@ function renderPresCats() {
 }
 async function guardarPresupuesto() {
   const editId = document.getElementById('pres-edit-id').value;
-  const p = { cat:document.getElementById('pres-cat').value, limite:parseFloat(document.getElementById('pres-limite').value)||0, color:document.getElementById('pres-color').value };
+  const p = { cat:document.getElementById('pres-cat').value, limite:parseFloat(document.getElementById('pres-limite').value)||0, color:document.getElementById('pres-color').value, rollover:document.getElementById('pres-rollover').checked };
   if(!p.limite) return alert('Ingresá un límite.');
   if(editId) {
     await db.presupuestos.update(parseInt(editId), p);
@@ -1648,18 +1652,24 @@ async function editarPresupuesto(id) {
   document.getElementById('pres-modal-title').textContent = 'Editar presupuesto';
   document.getElementById('pres-limite').value = p.limite;
   document.getElementById('pres-color').value = p.color||'var(--accent2)';
-  // openModal llama renderPresCats() que puebla el select; asignamos el valor después
+  document.getElementById('pres-rollover').checked = !!p.rollover;
   openModal('modal-presupuesto');
   document.getElementById('pres-cat').value = p.cat;
 }
 async function eliminarPresupuesto(id) { if(!confirm('¿Eliminar?')) return; await db.presupuestos.delete(id); renderPresupuestos(); }
 async function renderPresupuestos() {
   const mes = thisMonth();
+  const hoy = new Date();
+  const mesAntObj = new Date(hoy.getFullYear(), hoy.getMonth()-1, 1);
+  const mesAnt = `${mesAntObj.getFullYear()}-${String(mesAntObj.getMonth()+1).padStart(2,'0')}`;
   const allMov = await db.movimientos.toArray();
   const movMes = allMov.filter(m=>m.fecha&&m.fecha.startsWith(mes)&&m.tipo==='egreso');
+  const movAnt = allMov.filter(m=>m.fecha&&m.fecha.startsWith(mesAnt)&&m.tipo==='egreso');
   const pres = await db.presupuestos.toArray();
-  const gastadoMap = {};
+  const gastadoMap = {}, gastadoAntMap = {};
   movMes.forEach(m=>{ gastadoMap[m.cat||'Sin cat']=(gastadoMap[m.cat||'Sin cat']||0)+m.monto; });
+  movAnt.forEach(m=>{ gastadoAntMap[m.cat||'Sin cat']=(gastadoAntMap[m.cat||'Sin cat']||0)+m.monto; });
+
   const totalLimite = pres.reduce((s,p)=>s+p.limite,0);
   const totalGastado = pres.reduce((s,p)=>s+(gastadoMap[p.cat]||0),0);
   document.getElementById('pres-total').textContent = fmt(totalLimite);
@@ -1668,19 +1678,29 @@ async function renderPresupuestos() {
   const disp = totalLimite - totalGastado;
   dispEl.textContent = fmt(Math.abs(disp));
   dispEl.className = 'card-value '+(disp>=0?'amount-pos':'amount-neg');
+
   const grid = document.getElementById('pres-grid');
   if(!pres.length){ grid.innerHTML=`<div class="empty-state" style="grid-column:1/-1"><div class="icon">🎯</div>Sin presupuestos. Creá uno para empezar a controlar tus gastos.</div>`; return; }
   grid.innerHTML = pres.map(p=>{
     const gastado = gastadoMap[p.cat]||0;
-    const pct = p.limite ? Math.min(Math.round(gastado/p.limite*100),100) : 0;
-    const over = gastado > p.limite;
+    // Calcular rollover del mes anterior
+    const rolloverMonto = p.rollover ? (p.limite - (gastadoAntMap[p.cat]||0)) : 0;
+    const limiteEfectivo = Math.max(0, p.limite + rolloverMonto);
+    const pct = limiteEfectivo ? Math.min(Math.round(gastado/limiteEfectivo*100),100) : 0;
+    const over = gastado > limiteEfectivo;
     const color = over?'var(--red)':pct>80?'var(--yellow)':(p.color||'var(--accent2)');
+    const rolloverTag = p.rollover
+      ? `<span class="text-xs" style="color:${rolloverMonto>=0?'var(--accent2)':'var(--red)'}">
+           ${rolloverMonto>=0?'↑':'↓'} Rollover ${rolloverMonto>=0?'+':''}${fmt(rolloverMonto)}
+         </span>`
+      : '';
     return `<div class="card">
-      <div class="flex justify-between items-center" style="margin-bottom:12px">
+      <div class="flex justify-between items-center" style="margin-bottom:8px">
         <div>
-          <div class="card-title">${p.cat}</div>
+          <div class="card-title">${p.cat} ${p.rollover?'<span title="Rollover activo" style="font-size:11px">🔄</span>':''}</div>
           <div style="font-size:22px;font-weight:700;color:${color}">${fmt(gastado)}</div>
-          <div class="card-sub">de ${fmt(p.limite)}</div>
+          <div class="card-sub">de ${fmt(limiteEfectivo)}${p.rollover&&rolloverMonto!==0?` (base ${fmt(p.limite)})`:''}</div>
+          ${rolloverTag}
         </div>
         <div style="text-align:right">
           <div style="font-size:28px;font-weight:800;color:${color}">${pct}%</div>
@@ -1689,7 +1709,7 @@ async function renderPresupuestos() {
       </div>
       <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${color}"></div></div>
       <div class="flex justify-between mt-8 text-xs text-muted">
-        <span>Disponible: <strong>${fmt(Math.max(0,p.limite-gastado))}</strong></span>
+        <span>Disponible: <strong>${fmt(Math.max(0,limiteEfectivo-gastado))}</strong></span>
         <div class="flex gap-8">
           <button class="btn btn-ghost btn-sm btn-icon" onclick="editarPresupuesto(${p.id})">✏️</button>
           <button class="btn btn-ghost btn-sm btn-icon" onclick="eliminarPresupuesto(${p.id})">🗑</button>
