@@ -299,6 +299,7 @@ License: MIT
   <div id="dash-presupuestos-alert" class="mt-16"></div>
   <div id="dash-anomalias-wrap" class="mt-16"></div>
   <div id="dash-objetivos-wrap" class="mt-16"></div>
+  <div id="dash-informe-wrap" class="mt-16"></div>
   <div id="dash-score-wrap" class="mt-16"></div>
 
   <div class="card mt-16">
@@ -1061,6 +1062,7 @@ async function renderDashboard() {
   renderChartCat(movMes);
   renderMotivacional(objs, ingresos - egresos);
   renderBackupAlert();
+  renderInformeMensual(allMov);
   renderVencimientos(tarjetas, prestamos);
   renderAnomalias(allMov, 'dash-anomalias-wrap');
   fetchDolar();
@@ -1216,6 +1218,81 @@ async function hacerBackup() {
 function posponerBackup() {
   localStorage.setItem('fo_last_backup', (Date.now() - 23 * 24 * 60 * 60 * 1000).toString()); // recordar en 7 días
   document.getElementById('dash-backup-alert').innerHTML = '';
+}
+
+function renderInformeMensual(allMov) {
+  const el = document.getElementById('dash-informe-wrap');
+  if (!el) return;
+  const hoy = new Date();
+  const mesActual = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}`;
+  const mesAnterior = (() => { const d = new Date(hoy.getFullYear(), hoy.getMonth()-1, 1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; })();
+  const guardado = localStorage.getItem('fo_informe_mes');
+  const texto = localStorage.getItem('fo_informe_texto');
+
+  // Si ya hay informe de este mes, mostrarlo colapsado
+  if (guardado === mesActual && texto) {
+    el.innerHTML = `
+      <div class="card" style="border-left:4px solid #6c63ff">
+        <div class="flex items-center gap-8 mb-12" style="justify-content:space-between">
+          <div class="flex items-center gap-8"><span style="font-size:18px">🤖</span><strong>Informe mensual — ${mesAnterior}</strong></div>
+          <button class="btn btn-ghost btn-sm" onclick="this.closest('.card').querySelector('.informe-body').toggleAttribute('hidden')">▾</button>
+        </div>
+        <div class="informe-body" hidden style="font-size:13px;line-height:1.6;white-space:pre-wrap;color:var(--text-muted)">${texto.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+      </div>`;
+    return;
+  }
+
+  // Solo mostrar el botón si ya pasaron al menos 3 días del mes (hay datos del mes anterior)
+  const movMesAnt = allMov.filter(m => m.fecha && m.fecha.startsWith(mesAnterior));
+  if (movMesAnt.length === 0) { el.innerHTML = ''; return; }
+
+  el.innerHTML = `
+    <div class="card" style="border-left:4px solid #6c63ff">
+      <div class="flex items-center gap-8" style="justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div class="flex items-center gap-8">
+          <span style="font-size:20px">🤖</span>
+          <div>
+            <strong style="font-size:13px">Informe mensual disponible</strong>
+            <div class="text-xs text-muted">Resumen de ${mesAnterior} generado por IA</div>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-sm" id="btn-generar-informe" onclick="generarInformeMensual('${mesAnterior}')">✨ Generar informe</button>
+      </div>
+      <div id="informe-resultado" style="margin-top:12px"></div>
+    </div>`;
+}
+
+async function generarInformeMensual(mesAnterior) {
+  const btn = document.getElementById('btn-generar-informe');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Generando...'; }
+  const res = document.getElementById('informe-resultado');
+  try {
+    const allMov = await db.movimientos.toArray();
+    const movAnt = allMov.filter(m => m.fecha && m.fecha.startsWith(mesAnterior));
+    const movActual = allMov.filter(m => m.fecha && m.fecha.startsWith(thisMonth()));
+    const resumen = (movs, label) => {
+      const ing = movs.filter(m=>m.tipo==='ingreso').reduce((s,m)=>s+m.monto,0);
+      const egr = movs.filter(m=>m.tipo==='egreso').reduce((s,m)=>s+m.monto,0);
+      const cats = {};
+      movs.filter(m=>m.tipo==='egreso').forEach(m=>{cats[m.cat||'Sin cat']=(cats[m.cat||'Sin cat']||0)+m.monto;});
+      const topCats = Object.entries(cats).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([k,v])=>`${k}: $${v.toLocaleString('es-AR',{maximumFractionDigits:0})}`).join(', ');
+      return `${label}: ingresos $${ing.toLocaleString('es-AR',{maximumFractionDigits:0})}, egresos $${egr.toLocaleString('es-AR',{maximumFractionDigits:0})}, balance $${(ing-egr).toLocaleString('es-AR',{maximumFractionDigits:0})}. Top gastos: ${topCats||'ninguno'}.`;
+    };
+    const ctx = `${resumen(movAnt, mesAnterior)}\n${resumen(movActual, 'Mes actual (parcial)')}`;
+    const data = await callClaude({
+      model: 'claude-haiku-4-5-20251001', max_tokens: 800,
+      system: 'Sos un asesor financiero personal argentino. Respondés en español rioplatense, de forma concreta, en máximo 5 párrafos cortos. No usás disclaimers. Usás emojis con moderación.',
+      messages: [{ role: 'user', content: `Generá un informe mensual de mis finanzas de ${mesAnterior}. Comparalo con el mes actual si hay datos. Destacá lo positivo, lo que mejorar, y 1-2 recomendaciones concretas.\n\n${ctx}` }]
+    });
+    const texto = data.content?.[0]?.text || 'No se pudo generar el informe.';
+    localStorage.setItem('fo_informe_mes', thisMonth());
+    localStorage.setItem('fo_informe_texto', texto);
+    if (res) res.innerHTML = `<div style="font-size:13px;line-height:1.6;white-space:pre-wrap;color:var(--text-muted);margin-top:4px">${texto.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>`;
+    if (btn) { btn.textContent = '✅ Listo'; btn.disabled = true; }
+  } catch(e) {
+    if (res) res.innerHTML = `<div class="text-xs text-muted">Error: ${e.message === 'no-key' ? 'Configurá tu API key en Configuración → IA' : e.message}</div>`;
+    if (btn) { btn.disabled = false; btn.textContent = '✨ Generar informe'; }
+  }
 }
 
 function renderVencimientos(tarjetas, prestamos) {
