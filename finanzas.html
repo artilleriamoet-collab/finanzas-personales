@@ -257,6 +257,7 @@ License: MIT
   </div>
   <div id="dash-vencimientos-alert" class="mt-16"></div>
   <div id="dash-presupuestos-alert" class="mt-16"></div>
+  <div id="dash-anomalias-wrap" class="mt-16"></div>
   <div id="dash-objetivos-wrap" class="mt-16"></div>
   <div id="dash-score-wrap" class="mt-16"></div>
 
@@ -392,6 +393,7 @@ License: MIT
     <div><div class="page-title">Análisis & Comparativas</div><div class="page-sub">Evolución histórica y tendencias</div></div>
     <button class="btn btn-ghost btn-sm" onclick="renderAnalisis()">↻ Actualizar</button>
   </div>
+  <div id="an-anomalias-wrap" style="margin-bottom:16px"></div>
   <!-- Score financiero -->
   <div class="grid cols-2 gap-12" style="margin-bottom:16px">
     <div class="card">
@@ -1017,6 +1019,7 @@ async function renderDashboard() {
   renderChartCat(movMes);
   renderMotivacional(objs, ingresos - egresos);
   renderVencimientos(tarjetas, prestamos);
+  renderAnomalias(allMov, 'dash-anomalias-wrap');
   fetchDolar();
   // Score en dashboard
   const sd=await calcScore({allMov,liq:liquidez,inv:inversiones,tc:tarjetas,prest:prestamos});
@@ -1036,6 +1039,107 @@ async function renderDashboard() {
         <button class="btn btn-ghost btn-sm" onclick="navTo('analisis')">Ver análisis completo →</button>
       </div>
     </div>`;
+}
+
+function renderAnomalias(allMov, targetId) {
+  const el = document.getElementById(targetId);
+  if (!el) return;
+  const hoy = new Date();
+  const mesActual = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}`;
+  // Calcular los 3 meses anteriores
+  const mesesPrev = [];
+  for (let i = 1; i <= 3; i++) {
+    const d = new Date(hoy.getFullYear(), hoy.getMonth() - i, 1);
+    mesesPrev.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);
+  }
+  const gastos = allMov.filter(m => m.tipo === 'gasto');
+  // Agrupar por categoría y mes
+  const porCatMes = {};
+  for (const m of gastos) {
+    const mes = (m.fecha||'').slice(0,7);
+    const cat = m.categoria || 'Sin categoría';
+    if (!porCatMes[cat]) porCatMes[cat] = {};
+    porCatMes[cat][mes] = (porCatMes[cat][mes] || 0) + toARS(Math.abs(m.monto), m.moneda||'ARS');
+  }
+  const anomalias = [];
+  for (const [cat, meses] of Object.entries(porCatMes)) {
+    const actual = meses[mesActual] || 0;
+    if (!actual) continue;
+    const prevVals = mesesPrev.map(m => meses[m] || 0).filter(v => v > 0);
+    if (prevVals.length === 0) continue;
+    const promedio = prevVals.reduce((a,b)=>a+b,0) / prevVals.length;
+    if (promedio < 500) continue; // ignorar categorías con gasto mínimo histórico
+    const ratio = actual / promedio;
+    if (ratio > 1.5) {
+      anomalias.push({ cat, actual, promedio, ratio, diff: actual - promedio });
+    }
+  }
+  anomalias.sort((a,b) => b.ratio - a.ratio);
+
+  if (!anomalias.length) {
+    el.innerHTML = '';
+    return;
+  }
+
+  const isDash = targetId === 'dash-anomalias-wrap';
+  const lista = isDash ? anomalias.slice(0,3) : anomalias;
+
+  if (isDash) {
+    el.innerHTML = `
+      <div class="card" style="border-left:4px solid #f59e0b">
+        <div class="flex items-center gap-8 mb-12">
+          <span style="font-size:20px">⚠️</span>
+          <strong>Gastos inusuales este mes</strong>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${lista.map(a=>`
+            <div class="flex items-center" style="justify-content:space-between;gap:8px;font-size:13px">
+              <span class="text-muted">${a.cat}</span>
+              <div style="text-align:right">
+                <span style="color:#f87171;font-weight:700">${fmt(a.actual)}</span>
+                <span class="text-muted" style="font-size:11px"> (+${Math.round((a.ratio-1)*100)}% vs promedio)</span>
+              </div>
+            </div>`).join('')}
+        </div>
+        ${anomalias.length > 3 ? `<div class="text-xs text-muted mt-8">+${anomalias.length-3} más — ver en Análisis</div>` : ''}
+      </div>`;
+  } else {
+    el.innerHTML = `
+      <div class="card" style="border-left:4px solid #f59e0b">
+        <div class="flex items-center gap-8 mb-16">
+          <span style="font-size:20px">⚠️</span>
+          <strong>Detección de gastos inusuales</strong>
+          <span class="text-xs text-muted">(vs promedio últimos 3 meses)</span>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead>
+              <tr style="border-bottom:1px solid rgba(255,255,255,.1)">
+                <th style="text-align:left;padding:6px 8px;color:var(--text-muted)">Categoría</th>
+                <th style="text-align:right;padding:6px 8px;color:var(--text-muted)">Este mes</th>
+                <th style="text-align:right;padding:6px 8px;color:var(--text-muted)">Promedio</th>
+                <th style="text-align:right;padding:6px 8px;color:var(--text-muted)">Diferencia</th>
+                <th style="text-align:right;padding:6px 8px;color:var(--text-muted)">Variación</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${lista.map(a=>`
+                <tr style="border-bottom:1px solid rgba(255,255,255,.05)">
+                  <td style="padding:8px">${a.cat}</td>
+                  <td style="padding:8px;text-align:right;color:#f87171;font-weight:700">${fmt(a.actual)}</td>
+                  <td style="padding:8px;text-align:right;color:var(--text-muted)">${fmt(a.promedio)}</td>
+                  <td style="padding:8px;text-align:right;color:#f87171">+${fmt(a.diff)}</td>
+                  <td style="padding:8px;text-align:right">
+                    <span style="background:#f59e0b22;color:#f59e0b;padding:2px 8px;border-radius:99px;font-weight:700">
+                      +${Math.round((a.ratio-1)*100)}%
+                    </span>
+                  </td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+  }
 }
 
 function renderVencimientos(tarjetas, prestamos) {
@@ -1975,6 +2079,7 @@ async function calcScore(pre) {
 let chartPatrimonio, chartAhorro, chartCatComp;
 async function renderAnalisis() {
   const [allMov,snaps,tcA,invA,liqA,prestA]=await Promise.all([db.movimientos.toArray(),db.snapshots.orderBy('mes').toArray(),db.tarjetas.toArray(),db.inversiones.toArray(),db.liquidez.toArray(),db.prestamos.toArray()]);
+  renderAnomalias(allMov, 'an-anomalias-wrap');
   const sd=await calcScore({allMov,liq:liqA,inv:invA,tc:tcA,prest:prestA});
   document.getElementById('an-score').innerHTML = `
     <div style="font-size:60px;font-weight:900;color:${sd.gradeColor};line-height:1">${sd.grade}</div>
