@@ -336,9 +336,13 @@ License: MIT
 <div id="page-tarjetas" class="page">
   <div class="page-header">
     <div><div class="page-title">Tarjetas de crédito</div><div class="page-sub">Saldos, fechas y vencimientos</div></div>
-    <button class="btn btn-primary" onclick="openModal('modal-tarjeta')">+ Nueva tarjeta</button>
+    <div class="flex gap-8">
+      <button class="btn btn-ghost" onclick="openModal('modal-cuota')">💳 Compra en cuotas</button>
+      <button class="btn btn-primary" onclick="openModal('modal-tarjeta')">+ Nueva tarjeta</button>
+    </div>
   </div>
   <div class="grid cols-3" id="tc-grid"></div>
+  <div id="cuotas-activas-wrap" class="mt-16"></div>
   <div class="card mt-16">
     <div class="section-header"><span class="section-title">Detalle</span></div>
     <div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Banco</th><th>Saldo</th><th>Límite</th><th>Uso</th><th>Cierre</th><th>Vence</th><th>Estado</th><th></th></tr></thead><tbody id="tc-tbody"></tbody></table></div>
@@ -637,6 +641,31 @@ License: MIT
   </div>
 </div>
 
+<div class="modal-overlay" id="modal-cuota">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">💳 Compra en cuotas</div><button class="modal-close" onclick="closeModal('modal-cuota')">×</button></div>
+    <div class="form-group"><label class="form-label">Tarjeta</label><select class="form-input" id="cuota-tarjeta"></select></div>
+    <div class="form-group"><label class="form-label">Descripción</label><input class="form-input" id="cuota-desc" placeholder="TV, viaje, electrodoméstico..."></div>
+    <div class="form-group"><label class="form-label">Monto total</label><input class="form-input" type="number" id="cuota-monto" placeholder="0"></div>
+    <div class="form-group"><label class="form-label">Cantidad de cuotas</label>
+      <select class="form-input" id="cuota-num">
+        <option value="1">1 (pago único)</option>
+        <option value="2">2 cuotas</option>
+        <option value="3">3 cuotas</option>
+        <option value="6" selected>6 cuotas</option>
+        <option value="9">9 cuotas</option>
+        <option value="12">12 cuotas</option>
+        <option value="18">18 cuotas</option>
+        <option value="24">24 cuotas</option>
+        <option value="36">36 cuotas</option>
+      </select>
+    </div>
+    <div class="form-group"><label class="form-label">Categoría</label><select class="form-input" id="cuota-cat"></select></div>
+    <div class="form-group"><label class="form-label">Primera cuota (mes)</label><input class="form-input" type="month" id="cuota-inicio"></div>
+    <div class="flex gap-8"><button class="btn btn-primary w-full" onclick="guardarCuota()">Registrar</button><button class="btn btn-ghost" onclick="closeModal('modal-cuota')">Cancelar</button></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-tarjeta">
   <div class="modal">
     <div class="modal-header"><div class="modal-title" id="tc-modal-title">Nueva tarjeta de crédito</div><button class="modal-close" onclick="closeModal('modal-tarjeta')">×</button></div>
@@ -867,6 +896,9 @@ db.version(3).stores({
 db.version(4).stores({
   recurrentes: '++id'
 });
+db.version(5).stores({
+  cuotas: '++id, tarjetaId'
+});
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 let CFG = {
@@ -930,6 +962,7 @@ function openModal(id) {
   }
   if(id==='modal-presupuesto'){ renderPresCats(); }
   if(id==='modal-recurrentes'){ renderRecurrentes(); }
+  if(id==='modal-cuota'){ renderCuotaSelects(); }
 }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click',e=>{ if(e.target===m) m.classList.remove('open'); }));
@@ -1479,7 +1512,125 @@ async function editarTarjeta(id) {
   openModal('modal-tarjeta');
 }
 async function eliminarTarjeta(id){if(!confirm('¿Eliminar?'))return;await db.tarjetas.delete(id);renderTarjetas();refreshDashboard();}
+// ─── CUOTAS ───────────────────────────────────────────────────────────────────
+async function renderCuotaSelects() {
+  const tcs = await db.tarjetas.toArray();
+  const sel = document.getElementById('cuota-tarjeta');
+  sel.innerHTML = tcs.length
+    ? tcs.map(t=>`<option value="${t.id}">${t.nombre} (${t.banco})</option>`).join('')
+    : '<option value="">— Sin tarjetas —</option>';
+  document.getElementById('cuota-cat').innerHTML = CFG.categorias.map(c=>`<option>${c}</option>`).join('');
+  const hoy = new Date();
+  document.getElementById('cuota-inicio').value = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}`;
+}
+
+async function guardarCuota() {
+  const tarjetaId = parseInt(document.getElementById('cuota-tarjeta').value);
+  const desc = document.getElementById('cuota-desc').value.trim();
+  const montoTotal = parseFloat(document.getElementById('cuota-monto').value) || 0;
+  const numCuotas = parseInt(document.getElementById('cuota-num').value);
+  const cat = document.getElementById('cuota-cat').value;
+  const inicioStr = document.getElementById('cuota-inicio').value; // YYYY-MM
+  if (!desc || !montoTotal) return alert('Completá descripción y monto.');
+  if (!tarjetaId) return alert('Seleccioná una tarjeta.');
+  const montoCuota = montoTotal / numCuotas;
+  const [year, month] = inicioStr.split('-').map(Number);
+  await db.cuotas.add({ tarjetaId, desc, montoTotal, numCuotas, montoCuota, cat, inicioStr, createdAt: Date.now() });
+  closeModal('modal-cuota');
+  renderTarjetas();
+}
+
+async function eliminarCuota(id) {
+  if (!confirm('¿Eliminar esta compra en cuotas?')) return;
+  await db.cuotas.delete(id);
+  renderTarjetas();
+}
+
+async function renderCuotasActivas() {
+  const el = document.getElementById('cuotas-activas-wrap');
+  if (!el) return;
+  const cuotas = await db.cuotas.toArray();
+  const tcs = await db.tarjetas.toArray();
+  const tcMap = Object.fromEntries(tcs.map(t=>[t.id, t]));
+  const hoy = new Date();
+  const mesActual = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}`;
+
+  // Calcular cuotas pagadas y restantes para cada compra
+  const activas = cuotas.map(c => {
+    const [y, m] = c.inicioStr.split('-').map(Number);
+    const inicio = new Date(y, m-1, 1);
+    const mesesTranscurridos = (hoy.getFullYear() - inicio.getFullYear()) * 12 + (hoy.getMonth() - inicio.getMonth());
+    const pagadas = Math.min(Math.max(0, mesesTranscurridos), c.numCuotas);
+    const restantes = c.numCuotas - pagadas;
+    return { ...c, pagadas, restantes, tc: tcMap[c.tarjetaId] };
+  }).filter(c => c.restantes > 0);
+
+  if (!activas.length) { el.innerHTML = ''; return; }
+
+  // Proyección próximos 6 meses
+  const proyMeses = Array.from({length:6}, (_,i) => {
+    const d = new Date(hoy.getFullYear(), hoy.getMonth()+i, 1);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  });
+  const proyMap = {};
+  activas.forEach(c => {
+    const [y,m] = c.inicioStr.split('-').map(Number);
+    proyMeses.forEach((mes, idx) => {
+      const d = new Date(hoy.getFullYear(), hoy.getMonth()+idx, 1);
+      const cuotaNum = (d.getFullYear()-y)*12 + (d.getMonth()-(m-1));
+      if (cuotaNum >= 0 && cuotaNum < c.numCuotas) {
+        proyMap[mes] = (proyMap[mes]||0) + c.montoCuota;
+      }
+    });
+  });
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="section-header" style="margin-bottom:16px">
+        <span class="section-title">📅 Cuotas activas</span>
+        <span class="text-xs text-muted">${activas.length} compra${activas.length>1?'s':''} en cuotas</span>
+      </div>
+      <div style="overflow-x:auto;margin-bottom:20px">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr style="border-bottom:1px solid rgba(255,255,255,.1)">
+            <th style="text-align:left;padding:6px 8px;color:var(--text-muted)">Descripción</th>
+            <th style="text-align:left;padding:6px 8px;color:var(--text-muted)">Tarjeta</th>
+            <th style="text-align:right;padding:6px 8px;color:var(--text-muted)">Cuota</th>
+            <th style="text-align:right;padding:6px 8px;color:var(--text-muted)">Progreso</th>
+            <th style="text-align:right;padding:6px 8px;color:var(--text-muted)">Resta</th>
+            <th style="padding:6px 8px"></th>
+          </tr></thead>
+          <tbody>
+            ${activas.map(c=>`
+              <tr style="border-bottom:1px solid rgba(255,255,255,.05)">
+                <td style="padding:8px;font-weight:600">${c.desc}<div class="text-xs text-muted">${c.cat}</div></td>
+                <td style="padding:8px">${c.tc?.nombre||'—'}</td>
+                <td style="padding:8px;text-align:right;color:var(--red)">${fmt(c.montoCuota)}/mes</td>
+                <td style="padding:8px;text-align:right">
+                  <span class="text-xs text-muted">${c.pagadas}/${c.numCuotas}</span>
+                  <div class="progress-bar" style="width:80px;display:inline-block;margin-left:6px;vertical-align:middle">
+                    <div class="progress-fill" style="width:${Math.round(c.pagadas/c.numCuotas*100)}%"></div>
+                  </div>
+                </td>
+                <td style="padding:8px;text-align:right">${fmt(c.montoCuota*c.restantes)}</td>
+                <td style="padding:8px"><button class="btn btn-ghost btn-sm btn-icon" onclick="eliminarCuota(${c.id})">🗑</button></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="section-header" style="margin-bottom:10px"><span class="section-title" style="font-size:13px">Proyección próximos 6 meses</span></div>
+      <div style="display:flex;gap:8px;overflow-x:auto">
+        ${proyMeses.map(mes=>`
+          <div style="flex:1;min-width:80px;text-align:center;background:var(--surface2);border-radius:10px;padding:10px 8px">
+            <div class="text-xs text-muted" style="margin-bottom:4px">${mes.slice(5)} / ${mes.slice(2,4)}</div>
+            <div style="font-weight:700;font-size:13px;color:${(proyMap[mes]||0)>0?'var(--red)':'var(--text-muted)'}">${proyMap[mes]?fmt(proyMap[mes]):'—'}</div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
 async function renderTarjetas() {
+  await renderCuotasActivas();
   const list=await db.tarjetas.toArray();const hoy=new Date().getDate();
   const grid=document.getElementById('tc-grid');
   grid.innerHTML=list.map(t=>{const uso=t.limite?Math.round(t.saldo/t.limite*100):0;const col=uso>80?'var(--red)':uso>50?'var(--yellow)':'var(--accent2)';return`<div class="cc-card"><div class="cc-chip"></div><div class="cc-number">•••• •••• •••• ${t.digitos||'????'}</div><div class="flex justify-between items-center" style="margin-bottom:12px"><div><div style="font-size:11px;color:var(--text3)">${t.banco}</div><div style="font-weight:700">${t.nombre}</div></div><div style="text-align:right"><div style="font-size:11px;color:var(--text3)">Deuda</div><div class="amount-neg" style="font-weight:700;font-size:16px">${fmt(t.saldo)}</div></div></div><div class="progress-bar"><div class="progress-fill" style="width:${uso}%;background:${col}"></div></div><div class="flex justify-between mt-8 text-xs text-muted"><span>Uso ${uso}%</span><span>Límite ${fmt(t.limite)}</span></div><div class="flex justify-between mt-8 text-xs"><span style="color:var(--text3)">Cierre día ${t.cierre}</span><span style="color:var(--text3)">Vence día ${t.vencimiento}</span></div></div>`;}).join('');
