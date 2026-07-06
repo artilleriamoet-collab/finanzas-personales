@@ -376,6 +376,7 @@ License: MIT
     <div class="card"><div class="card-title">Total acumulado</div><div class="card-value amount-pos" id="obj-kpi-acum">$0</div></div>
   </div>
   <div class="grid cols-2" id="obj-grid"></div>
+  <div id="obj-proyeccion-wrap" class="mt-16"></div>
   <div id="obj-plan-panel" class="card mt-16" style="display:none">
     <div class="section-header">
       <span class="section-title" id="obj-plan-title">Plan de ahorro</span>
@@ -1563,6 +1564,7 @@ async function renderObjetivos() {
     return;
   }
 
+  renderProyeccion(list, allMov, flujoLibre);
   grid.innerHTML = list.map(o => {
     const falta = Math.max(0, o.monto - (o.ahorroActual||0));
     const pct = Math.min(100, Math.round((o.ahorroActual||0) / o.monto * 100));
@@ -1616,6 +1618,121 @@ async function renderObjetivos() {
       </div>
     </div>`;
   }).join('');
+}
+
+let chartProyeccion = null;
+function renderProyeccion(list, allMov, flujoLibreActual) {
+  const wrap = document.getElementById('obj-proyeccion-wrap');
+  const activos = list.filter(o => (o.ahorroActual||0) < o.monto);
+  if (activos.length === 0) { wrap.innerHTML = ''; return; }
+
+  // Promedio flujo libre últimos 3 meses
+  const hoy = new Date();
+  let sumFlujo = 0, mesesCont = 0;
+  for (let i = 1; i <= 3; i++) {
+    const d = new Date(hoy.getFullYear(), hoy.getMonth() - i, 1);
+    const m = d.toISOString().slice(0, 7);
+    const mv = allMov.filter(x => x.fecha && x.fecha.startsWith(m));
+    const ing = mv.filter(x=>x.tipo==='ingreso').reduce((s,x)=>s+x.monto,0);
+    const egr = mv.filter(x=>x.tipo==='egreso').reduce((s,x)=>s+x.monto,0);
+    if (ing > 0) { sumFlujo += (ing - egr); mesesCont++; }
+  }
+  const avgFlujo = mesesCont > 0 ? sumFlujo / mesesCont : flujoLibreActual;
+
+  // Proyección por objetivo
+  const MESES_MAX = 60;
+  const labels = Array.from({length: MESES_MAX + 1}, (_, i) => {
+    const d = new Date(hoy.getFullYear(), hoy.getMonth() + i, 1);
+    return i === 0 ? 'Hoy' : d.toLocaleDateString('es-AR', {month:'short', year:'2-digit'});
+  });
+
+  // Distribuir flujo disponible proporcionalmente entre objetivos activos
+  const totalMensualNec = activos.reduce((s,o) => {
+    const falta = o.monto - (o.ahorroActual||0);
+    return s + falta / (o.meses || plazoMesesDefault(o.plazo));
+  }, 0);
+
+  const COLORS = ['#6c63ff','#4ade80','#f97316','#38bdf8','#f87171','#fbbf24'];
+  const datasets = [];
+  const resumen = [];
+
+  activos.slice(0, 4).forEach((o, idx) => {
+    const color = o.color || COLORS[idx % COLORS.length];
+    const falta = o.monto - (o.ahorroActual||0);
+    const mesesPlazo = o.meses || plazoMesesDefault(o.plazo);
+    const mensualNec = falta / mesesPlazo;
+
+    // Aporte proyectado: proporción del flujo disponible
+    const proporcion = totalMensualNec > 0 ? mensualNec / totalMensualNec : 1 / activos.length;
+    const mensualProy = Math.max(0, avgFlujo) * proporcion;
+
+    // Línea requerida (dashed)
+    const dataReq = Array.from({length: MESES_MAX + 1}, (_, i) => {
+      const acum = (o.ahorroActual||0) + mensualNec * i;
+      return Math.min(acum, o.monto);
+    });
+    // Línea proyectada (solid)
+    const dataProy = [];
+    let acumProy = o.ahorroActual||0;
+    let mesProy = null;
+    for (let i = 0; i <= MESES_MAX; i++) {
+      dataProy.push(Math.min(acumProy, o.monto));
+      if (!mesProy && acumProy >= o.monto) mesProy = i;
+      acumProy += mensualProy;
+    }
+
+    datasets.push(
+      { label: `${o.emoji||'🎯'} ${o.nombre} (requerido)`, data: dataReq, borderColor: color, borderDash: [6,4], borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0 },
+      { label: `${o.emoji||'🎯'} ${o.nombre} (proyectado)`, data: dataProy, borderColor: color, borderWidth: 2.5, pointRadius: 0, fill: false, tension: 0.2 }
+    );
+
+    const enTiempo = mesProy !== null && mesProy <= mesesPlazo;
+    const fechaEst = mesProy !== null
+      ? new Date(hoy.getFullYear(), hoy.getMonth() + mesProy, 1).toLocaleDateString('es-AR', {month:'long', year:'numeric'})
+      : `+${MESES_MAX} meses`;
+    resumen.push({ o, pct: Math.min(100,Math.round((o.ahorroActual||0)/o.monto*100)), mensualNec, mensualProy, fechaEst, enTiempo, color });
+  });
+
+  wrap.innerHTML = `
+    <div class="card mt-16">
+      <div class="section-header" style="margin-bottom:16px">
+        <span class="section-title">📈 Proyección de objetivos</span>
+        <span class="text-xs text-muted">Basado en promedio últimos 3 meses · flujo disponible: ${fmt(Math.max(0,avgFlujo))}/mes</span>
+      </div>
+      <div style="height:260px;margin-bottom:20px"><canvas id="chart-proyeccion"></canvas></div>
+      <div style="display:grid;gap:8px">
+        ${resumen.map(r=>`
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--surface2);border-radius:10px;border-left:3px solid ${r.color}">
+          <span style="font-size:22px">${r.o.emoji||'🎯'}</span>
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:13px">${r.o.nombre}</div>
+            <div class="text-xs text-muted">Requiere ${fmt(r.mensualNec)}/mes · proyectado ${fmt(r.mensualProy)}/mes</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:13px;font-weight:700;color:${r.enTiempo?'var(--accent2)':'var(--yellow)'}">${r.enTiempo?'✅ En tiempo':'⚠️ Se extiende'}</div>
+            <div class="text-xs text-muted">Est. ${r.fechaEst}</div>
+          </div>
+        </div>`).join('')}
+      </div>
+    </div>`;
+
+  if (chartProyeccion) chartProyeccion.destroy();
+  chartProyeccion = new Chart(document.getElementById('chart-proyeccion'), {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      animation: false, responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmt(ctx.raw)}` } }
+      },
+      scales: {
+        x: { ticks: { color:'#64748b', maxTicksLimit: 12 }, grid: { color:'#2e3249' } },
+        y: { ticks: { color:'#64748b', callback: v => '$'+Number(v).toLocaleString('es-AR',{maximumFractionDigits:0}) }, grid: { color:'#2e3249' } }
+      }
+    }
+  });
 }
 
 async function planIAObjetivo(id) {
