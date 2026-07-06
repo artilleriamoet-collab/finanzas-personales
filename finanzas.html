@@ -152,6 +152,9 @@ License: MIT
   @media(max-width:900px){.cols-4{grid-template-columns:repeat(2,1fr);}.cols-3{grid-template-columns:repeat(2,1fr);}.cols-1-2,.cols-2-1{grid-template-columns:1fr;}}
   /* ─── Mobile ─── */
   #menu-toggle{display:none;position:fixed;top:14px;left:14px;z-index:60;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:8px 12px;font-size:18px;cursor:pointer;line-height:1;}
+  #fab-add{position:fixed;bottom:28px;right:24px;z-index:100;width:56px;height:56px;border-radius:50%;background:var(--accent);color:#fff;font-size:28px;line-height:1;border:none;cursor:pointer;box-shadow:0 4px 20px rgba(108,99,255,.5);transition:transform .15s,box-shadow .15s;}
+  #fab-add:hover{transform:scale(1.1);box-shadow:0 6px 28px rgba(108,99,255,.7);}
+  @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
   #sidebar-backdrop{display:none;position:fixed;inset:0;background:#000a;z-index:40;}
   @media(max-width:768px){
     #menu-toggle{display:block;}
@@ -195,6 +198,42 @@ License: MIT
 
 <button id="menu-toggle" onclick="toggleSidebar()">☰</button>
 <div id="sidebar-backdrop" onclick="toggleSidebar(false)"></div>
+
+<!-- BOTÓN FLOTANTE + MODAL REGISTRO RÁPIDO -->
+<button id="fab-add" onclick="abrirRegistroRapido()" title="Registro rápido">+</button>
+<div id="modal-registro-rapido" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,.6);align-items:flex-end;justify-content:center">
+  <div style="background:var(--surface);border-radius:20px 20px 0 0;padding:24px 20px 32px;width:100%;max-width:480px;animation:slideUp .2s ease">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <strong style="font-size:16px">⚡ Registro rápido</strong>
+      <button class="btn btn-ghost btn-sm btn-icon" onclick="cerrarRegistroRapido()">✕</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+      <div>
+        <label class="label">Tipo</label>
+        <select id="rr-tipo" class="input"><option value="egreso">Gasto</option><option value="ingreso">Ingreso</option></select>
+      </div>
+      <div>
+        <label class="label">Monto</label>
+        <input id="rr-monto" class="input" type="number" inputmode="decimal" placeholder="0" min="0">
+      </div>
+    </div>
+    <div style="margin-bottom:10px">
+      <label class="label">Descripción</label>
+      <input id="rr-desc" class="input" type="text" placeholder="ej: supermercado, nafta...">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px">
+      <div>
+        <label class="label">Categoría</label>
+        <select id="rr-cat" class="input"></select>
+      </div>
+      <div>
+        <label class="label">Fecha</label>
+        <input id="rr-fecha" class="input" type="date">
+      </div>
+    </div>
+    <button class="btn btn-primary w-full" style="height:48px;font-size:15px" onclick="guardarRegistroRapido()">Guardar</button>
+  </div>
+</div>
 
 <!-- SIDEBAR -->
 <nav class="sidebar" id="sidebar">
@@ -255,6 +294,7 @@ License: MIT
     <div class="card"><div class="section-header"><span class="section-title">Inversiones</span><span class="badge badge-blue" id="dash-inv-total">$0</span></div><div id="dash-inv-list"></div></div>
     <div class="card"><div class="section-header"><span class="section-title">Liquidez</span><span class="badge badge-green" id="dash-liq-total">$0</span></div><div id="dash-liq-list"></div></div>
   </div>
+  <div id="dash-backup-alert" class="mt-16"></div>
   <div id="dash-vencimientos-alert" class="mt-16"></div>
   <div id="dash-presupuestos-alert" class="mt-16"></div>
   <div id="dash-anomalias-wrap" class="mt-16"></div>
@@ -1020,6 +1060,7 @@ async function renderDashboard() {
   } else { wrap.innerHTML=''; }
   renderChartCat(movMes);
   renderMotivacional(objs, ingresos - egresos);
+  renderBackupAlert();
   renderVencimientos(tarjetas, prestamos);
   renderAnomalias(allMov, 'dash-anomalias-wrap');
   fetchDolar();
@@ -1143,6 +1184,38 @@ function renderAnomalias(allMov, targetId) {
         </div>
       </div>`;
   }
+}
+
+function renderBackupAlert() {
+  const el = document.getElementById('dash-backup-alert');
+  if (!el) return;
+  const last = parseInt(localStorage.getItem('fo_last_backup') || '0');
+  const dias = Math.floor((Date.now() - last) / (1000 * 60 * 60 * 24));
+  if (last && dias < 30) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div class="card" style="border-left:4px solid #6c63ff;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div class="flex items-center gap-8">
+        <span style="font-size:20px">💾</span>
+        <div>
+          <strong style="font-size:13px">${last ? `Último backup hace ${dias} días` : 'Nunca hiciste un backup'}</strong>
+          <div class="text-xs text-muted">Guardá tus datos por si algo sale mal</div>
+        </div>
+      </div>
+      <div class="flex gap-8">
+        <button class="btn btn-primary btn-sm" onclick="hacerBackup()">⬇️ Hacer backup</button>
+        <button class="btn btn-ghost btn-sm" onclick="posponerBackup()" title="Recordarme en 7 días">Más tarde</button>
+      </div>
+    </div>`;
+}
+async function hacerBackup() {
+  await exportarJSON();
+  localStorage.setItem('fo_last_backup', Date.now().toString());
+  document.getElementById('dash-backup-alert').innerHTML = '<div class="card text-sm" style="border-left:4px solid var(--accent2);color:var(--accent2)">✅ Backup guardado — recordaré en 30 días.</div>';
+  setTimeout(() => { const el = document.getElementById('dash-backup-alert'); if(el) el.innerHTML = ''; }, 4000);
+}
+function posponerBackup() {
+  localStorage.setItem('fo_last_backup', (Date.now() - 23 * 24 * 60 * 60 * 1000).toString()); // recordar en 7 días
+  document.getElementById('dash-backup-alert').innerHTML = '';
 }
 
 function renderVencimientos(tarjetas, prestamos) {
@@ -2162,6 +2235,41 @@ async function init(){
 }
 if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
 initSecurity();
+
+// ─── REGISTRO RÁPIDO ──────────────────────────────────────────────────────────
+function abrirRegistroRapido() {
+  const hoy = new Date().toISOString().slice(0,10);
+  document.getElementById('rr-fecha').value = hoy;
+  document.getElementById('rr-desc').value = '';
+  document.getElementById('rr-monto').value = '';
+  document.getElementById('rr-tipo').value = 'egreso';
+  const sel = document.getElementById('rr-cat');
+  sel.innerHTML = CFG.categorias.map(c=>`<option>${c}</option>`).join('');
+  document.getElementById('modal-registro-rapido').style.display = 'flex';
+  setTimeout(() => document.getElementById('rr-monto').focus(), 100);
+}
+function cerrarRegistroRapido() {
+  document.getElementById('modal-registro-rapido').style.display = 'none';
+}
+async function guardarRegistroRapido() {
+  const monto = parseFloat(document.getElementById('rr-monto').value) || 0;
+  const desc = document.getElementById('rr-desc').value.trim();
+  if (!monto || !desc) return alert('Completá descripción y monto.');
+  await db.movimientos.add({
+    tipo: document.getElementById('rr-tipo').value,
+    desc, monto,
+    fecha: document.getElementById('rr-fecha').value,
+    cat: document.getElementById('rr-cat').value,
+    tags: [], notas: '', createdAt: Date.now()
+  });
+  cerrarRegistroRapido();
+  refreshDashboard();
+  // Feedback visual en el botón
+  const fab = document.getElementById('fab-add');
+  fab.textContent = '✅';
+  setTimeout(() => { fab.textContent = '+'; }, 1500);
+}
+
 </script>
 </body>
 </html>
