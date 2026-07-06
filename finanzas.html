@@ -436,8 +436,12 @@ License: MIT
 <div id="page-analisis" class="page">
   <div class="page-header">
     <div><div class="page-title">Análisis & Comparativas</div><div class="page-sub">Evolución histórica y tendencias</div></div>
-    <button class="btn btn-ghost btn-sm" onclick="renderAnalisis()">↻ Actualizar</button>
+    <div class="flex gap-8 items-center">
+      <button class="btn btn-ghost btn-sm" onclick="renderAnalisis()">↻ Actualizar</button>
+      <button id="btn-toggle-ipc" class="btn btn-ghost btn-sm" onclick="toggleModoReal()" title="Ajustar por inflación (IPC INDEC)">📊 Nominal</button>
+    </div>
   </div>
+  <div id="an-ipc-banner" style="display:none;margin-bottom:12px"></div>
   <div id="an-anomalias-wrap" style="margin-bottom:16px"></div>
   <!-- Score financiero -->
   <div class="grid cols-2 gap-12" style="margin-bottom:16px">
@@ -2449,6 +2453,67 @@ async function calcScore(pre) {
 }
 
 // ─── ANÁLISIS ────────────────────────────────────────────────────────────────
+// ─── IPC / INFLACIÓN ──────────────────────────────────────────────────────────
+let _ipcMap = null; // { 'YYYY-MM': índice }
+let _modoReal = false;
+
+async function fetchInflacion() {
+  if (_ipcMap) return _ipcMap;
+  try {
+    const res = await fetch('/api/inflacion');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const json = await res.json();
+    _ipcMap = {};
+    (json.data || []).forEach(([fecha, valor]) => {
+      if (fecha && valor != null) {
+        _ipcMap[fecha.slice(0, 7)] = valor; // 'YYYY-MM' → índice
+      }
+    });
+    return _ipcMap;
+  } catch (e) {
+    _ipcMap = null;
+    throw e;
+  }
+}
+
+function deflactar(valor, mesMov, ipcMap, ipcBase) {
+  const ipcMes = ipcMap[mesMov];
+  if (!ipcMes || !ipcBase) return valor;
+  return valor * (ipcBase / ipcMes);
+}
+
+async function toggleModoReal() {
+  const btn = document.getElementById('btn-toggle-ipc');
+  const banner = document.getElementById('an-ipc-banner');
+  if (!_modoReal) {
+    btn.textContent = '⏳ Cargando IPC...';
+    btn.disabled = true;
+    try {
+      await fetchInflacion();
+      _modoReal = true;
+      btn.textContent = '📉 Real (IPC)';
+      btn.style.background = 'var(--accent)';
+      btn.style.color = '#fff';
+      if (banner) banner.style.display = 'none';
+    } catch (e) {
+      btn.textContent = '📊 Nominal';
+      if (banner) {
+        banner.innerHTML = `<div class="card" style="border-left:4px solid var(--red);font-size:13px">⚠️ No se pudo cargar IPC del INDEC: ${e.message}. Verificá la conexión.</div>`;
+        banner.style.display = 'block';
+      }
+    } finally {
+      btn.disabled = false;
+    }
+  } else {
+    _modoReal = false;
+    btn.textContent = '📊 Nominal';
+    btn.style.background = '';
+    btn.style.color = '';
+    if (banner) banner.style.display = 'none';
+  }
+  renderAnalisis();
+}
+
 let chartPatrimonio, chartAhorro, chartCatComp;
 async function renderAnalisis() {
   const [allMov,snaps,tcA,invA,liqA,prestA]=await Promise.all([db.movimientos.toArray(),db.snapshots.orderBy('mes').toArray(),db.tarjetas.toArray(),db.inversiones.toArray(),db.liquidez.toArray(),db.prestamos.toArray()]);
@@ -2473,27 +2538,57 @@ async function renderAnalisis() {
     <div class="flex justify-between text-sm" style="padding:8px 0;border-bottom:1px solid var(--border)"><span>Cuotas / ingresos</span><span class="${sd.deudaRatio<=30?'amount-pos':'amount-neg'} font-bold">${sd.deudaRatio.toFixed(1)}%</span></div>
     <div class="flex justify-between text-sm" style="padding:8px 0"><span>Fondo emergencia</span><span class="${sd.mesesEmerg>=3?'amount-pos':sd.mesesEmerg>=1?'':'amount-neg'} font-bold">${sd.mesesEmerg.toFixed(1)} meses</span></div>
   `;
+  // IPC base = mes más reciente disponible
+  const ipcMap = (_modoReal && _ipcMap) ? _ipcMap : null;
+  const hoyRef = new Date();
+  const mesBaseKey = ipcMap
+    ? Object.keys(ipcMap).sort().reverse().find(k => k <= `${hoyRef.getFullYear()}-${String(hoyRef.getMonth()+1).padStart(2,'0')}`)
+    : null;
+  const ipcBase = mesBaseKey ? ipcMap[mesBaseKey] : null;
+
+  // Banner modo real
+  const banner = document.getElementById('an-ipc-banner');
+  if (banner) {
+    if (_modoReal && ipcBase) {
+      banner.innerHTML = `<div class="card" style="border-left:4px solid var(--accent);font-size:12px;padding:8px 14px">
+        📉 <strong>Modo real activo</strong> — valores deflactados a pesos de <strong>${mesBaseKey}</strong> usando IPC INDEC.
+        Permite comparar meses sin el efecto de la inflación.
+      </div>`;
+      banner.style.display = 'block';
+    } else {
+      banner.style.display = 'none';
+    }
+  }
+
   // Build 6-month history from movimientos + snapshots
   const months = [];
   for (let i = 5; i >= 0; i--) {
-    const d = new Date(); d.setMonth(d.getMonth() - i);
-    const m = d.toISOString().slice(0, 7);
+    const d = new Date(hoyRef.getFullYear(), hoyRef.getMonth() - i, 1);
+    const m = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
     const label = d.toLocaleDateString('es-AR', { month: 'short', year: '2-digit' });
     const mv = allMov.filter(x => x.fecha && x.fecha.startsWith(m));
-    const ing = mv.filter(x => x.tipo === 'ingreso').reduce((s, x) => s + x.monto, 0);
-    const egr = mv.filter(x => x.tipo === 'egreso').reduce((s, x) => s + x.monto, 0);
-    const ahorro = ing > 0 ? ((ing - egr) / ing * 100) : 0;
+    let ing = mv.filter(x => x.tipo === 'ingreso').reduce((s, x) => s + x.monto, 0);
+    let egr = mv.filter(x => x.tipo === 'egreso').reduce((s, x) => s + x.monto, 0);
     const snap = snaps.find(s => s.mes === m);
-    months.push({ m, label, ing, egr, ahorro, patrimonio: snap ? snap.patrimonio : null });
+    let patrimonio = snap ? snap.patrimonio : null;
+    // Deflactar si modo real
+    if (ipcMap && ipcBase) {
+      ing = deflactar(ing, m, ipcMap, ipcBase);
+      egr = deflactar(egr, m, ipcMap, ipcBase);
+      if (patrimonio !== null) patrimonio = deflactar(patrimonio, m, ipcMap, ipcBase);
+    }
+    const ahorro = ing > 0 ? ((ing - egr) / ing * 100) : 0;
+    months.push({ m, label, ing, egr, ahorro, patrimonio });
   }
+  const modoLabel = _modoReal && ipcBase ? ` (pesos de ${mesBaseKey})` : '';
   // Chart patrimonio
   if (chartPatrimonio) chartPatrimonio.destroy();
   chartPatrimonio = new Chart(document.getElementById('chart-patrimonio'), {
     type: 'line',
-    data: { labels: months.map(x => x.label), datasets: [{ label: 'Patrimonio neto', data: months.map(x => x.patrimonio), borderColor: '#6c63ff', backgroundColor: '#6c63ff22', fill: true, tension: 0.3, pointBackgroundColor: '#6c63ff', spanGaps: true }] },
+    data: { labels: months.map(x => x.label), datasets: [{ label: 'Patrimonio neto' + modoLabel, data: months.map(x => x.patrimonio !== null ? Math.round(x.patrimonio) : null), borderColor: '#6c63ff', backgroundColor: '#6c63ff22', fill: true, tension: 0.3, pointBackgroundColor: '#6c63ff', spanGaps: true }] },
     options: { plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } }, scales: { x: { ticks: { color: '#64748b' }, grid: { color: '#2e3249' } }, y: { ticks: { color: '#64748b', callback: v => '$' + Number(v).toLocaleString('es-AR') }, grid: { color: '#2e3249' } } }, responsive: true, maintainAspectRatio: false }
   });
-  // Chart ahorro %
+  // Chart ahorro % (la tasa no cambia con la deflación, es un ratio)
   if (chartAhorro) chartAhorro.destroy();
   chartAhorro = new Chart(document.getElementById('chart-ahorro'), {
     type: 'bar',
@@ -2505,17 +2600,28 @@ async function renderAnalisis() {
     const bal = x.ing - x.egr;
     return `<tr><td><strong>${x.label}</strong></td><td class="amount-pos">${fmt(x.ing)}</td><td class="amount-neg">${fmt(x.egr)}</td><td class="${bal >= 0 ? 'amount-pos' : 'amount-neg'}">${bal >= 0 ? '+' : ''}${fmt(bal)}</td><td class="${x.ahorro >= 20 ? 'amount-pos' : x.ahorro >= 0 ? '' : 'amount-neg'}">${x.ahorro.toFixed(1)}%</td><td>${x.patrimonio !== null ? fmt(x.patrimonio) : '<span class="text-muted text-xs">—</span>'}</td></tr>`;
   }).join('');
-  // Category comparison: this month vs last month
-  const now2 = new Date(); const mesAct = now2.toISOString().slice(0, 7);
-  now2.setMonth(now2.getMonth() - 1); const mesAnt = now2.toISOString().slice(0, 7);
+  // Category comparison: this month vs last month (con deflación si aplica)
+  const dNow = new Date(hoyRef.getFullYear(), hoyRef.getMonth(), 1);
+  const mesAct = `${dNow.getFullYear()}-${String(dNow.getMonth()+1).padStart(2,'0')}`;
+  const dAnt = new Date(hoyRef.getFullYear(), hoyRef.getMonth()-1, 1);
+  const mesAnt = `${dAnt.getFullYear()}-${String(dAnt.getMonth()+1).padStart(2,'0')}`;
   const catMap = {};
-  allMov.filter(m => m.fecha && m.fecha.startsWith(mesAct) && m.tipo === 'egreso').forEach(m => { const c = m.cat || 'Sin cat'; catMap[c] = catMap[c] || { actual: 0, anterior: 0 }; catMap[c].actual += m.monto; });
-  allMov.filter(m => m.fecha && m.fecha.startsWith(mesAnt) && m.tipo === 'egreso').forEach(m => { const c = m.cat || 'Sin cat'; catMap[c] = catMap[c] || { actual: 0, anterior: 0 }; catMap[c].anterior += m.monto; });
+  allMov.filter(m => m.fecha && m.fecha.startsWith(mesAct) && m.tipo === 'egreso').forEach(m => {
+    const c = m.cat || 'Sin cat'; catMap[c] = catMap[c] || { actual: 0, anterior: 0 };
+    catMap[c].actual += ipcMap && ipcBase ? deflactar(m.monto, mesAct, ipcMap, ipcBase) : m.monto;
+  });
+  allMov.filter(m => m.fecha && m.fecha.startsWith(mesAnt) && m.tipo === 'egreso').forEach(m => {
+    const c = m.cat || 'Sin cat'; catMap[c] = catMap[c] || { actual: 0, anterior: 0 };
+    catMap[c].anterior += ipcMap && ipcBase ? deflactar(m.monto, mesAnt, ipcMap, ipcBase) : m.monto;
+  });
   const cats = Object.keys(catMap).sort((a, b) => (catMap[b].actual + catMap[b].anterior) - (catMap[a].actual + catMap[a].anterior)).slice(0, 8);
   if (chartCatComp) chartCatComp.destroy();
   chartCatComp = new Chart(document.getElementById('chart-cat-comp'), {
     type: 'bar',
-    data: { labels: cats, datasets: [{ label: 'Mes anterior', data: cats.map(c => catMap[c].anterior), backgroundColor: '#38bdf855', borderColor: '#38bdf8', borderWidth: 2, borderRadius: 4 }, { label: 'Mes actual', data: cats.map(c => catMap[c].actual), backgroundColor: '#6c63ff55', borderColor: '#6c63ff', borderWidth: 2, borderRadius: 4 }] },
+    data: { labels: cats, datasets: [
+      { label: 'Mes anterior' + modoLabel, data: cats.map(c => Math.round(catMap[c].anterior)), backgroundColor: '#38bdf855', borderColor: '#38bdf8', borderWidth: 2, borderRadius: 4 },
+      { label: 'Mes actual' + modoLabel, data: cats.map(c => Math.round(catMap[c].actual)), backgroundColor: '#6c63ff55', borderColor: '#6c63ff', borderWidth: 2, borderRadius: 4 }
+    ]},
     options: { plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } }, scales: { x: { ticks: { color: '#64748b' }, grid: { color: '#2e3249' } }, y: { ticks: { color: '#64748b', callback: v => '$' + Number(v).toLocaleString('es-AR') }, grid: { color: '#2e3249' } } }, responsive: true, maintainAspectRatio: false }
   });
 }
