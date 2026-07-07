@@ -600,6 +600,10 @@ License: MIT
       <div class="info-box" style="margin-bottom:12px" id="storage-info">Cargando...</div>
       <button class="btn btn-danger" onclick="if(confirm('¿Borrar TODOS los datos?'))resetDatos()">🗑️ Borrar todos los datos</button>
     </div>
+    <div class="card" style="grid-column:1/-1">
+      <div class="section-title" style="margin-bottom:12px">☁️ Cuenta en la nube (sincronización)</div>
+      <div id="cloud-section">Cargando...</div>
+    </div>
   </div>
 </div>
 
@@ -992,6 +996,7 @@ async function guardarMovimiento() {
   document.getElementById('mov-modal-title').textContent='Nuevo movimiento';
   ['mov-desc','mov-monto','mov-tags','mov-notas'].forEach(id=>document.getElementById(id).value='');
   renderMovimientos(); refreshDashboard();
+  if (supaUser()) syncToCloud().catch(()=>{});
 }
 async function editarMovimiento(id) {
   const m = await db.movimientos.get(id);
@@ -1008,7 +1013,7 @@ async function editarMovimiento(id) {
   openModal('modal-movimiento');
   document.getElementById('mov-cat').value = m.cat||'';
 }
-async function eliminarMovimiento(id) { if(!confirm('¿Eliminar?')) return; await db.movimientos.delete(id); renderMovimientos(); refreshDashboard(); }
+async function eliminarMovimiento(id) { if(!confirm('¿Eliminar?')) return; await db.movimientos.delete(id); renderMovimientos(); refreshDashboard(); if (supaUser()) syncToCloud().catch(()=>{}); }
 
 async function renderMovimientos() {
   const search=(document.getElementById('filter-search')||{value:''}).value.toLowerCase();
@@ -1876,7 +1881,7 @@ async function renderPresupuestos() {
 }
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
-async function renderConfig(){document.getElementById('cfg-moneda').value=CFG.moneda;document.getElementById('cfg-locale').value=CFG.locale;document.getElementById('cfg-usd').value=CFG.usd||1000;document.getElementById('cats-list').innerHTML=CFG.categorias.map(c=>{const s=c.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');return `<span class="chip selected" data-cat="${s}" onclick="removeCategoria(this.dataset.cat)">${s} ×</span>`;}).join('');const cnt={mov:await db.movimientos.count(),tc:await db.tarjetas.count(),inv:await db.inversiones.count(),liq:await db.liquidez.count(),p:await db.prestamos.count(),obj:await db.objetivos.count(),snap:await db.snapshots.count()};document.getElementById('storage-info').innerHTML=`📦 <strong>IndexedDB activo</strong><br>Movimientos: ${cnt.mov} · Tarjetas: ${cnt.tc} · Inversiones: ${cnt.inv} · Liquidez: ${cnt.liq} · Préstamos: ${cnt.p} · Objetivos: ${cnt.obj} · Snapshots: ${cnt.snap}`;}
+async function renderConfig(){document.getElementById('cfg-moneda').value=CFG.moneda;document.getElementById('cfg-locale').value=CFG.locale;document.getElementById('cfg-usd').value=CFG.usd||1000;document.getElementById('cats-list').innerHTML=CFG.categorias.map(c=>{const s=c.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');return `<span class="chip selected" data-cat="${s}" onclick="removeCategoria(this.dataset.cat)">${s} ×</span>`;}).join('');const cnt={mov:await db.movimientos.count(),tc:await db.tarjetas.count(),inv:await db.inversiones.count(),liq:await db.liquidez.count(),p:await db.prestamos.count(),obj:await db.objetivos.count(),snap:await db.snapshots.count()};document.getElementById('storage-info').innerHTML=`📦 <strong>IndexedDB activo</strong><br>Movimientos: ${cnt.mov} · Tarjetas: ${cnt.tc} · Inversiones: ${cnt.inv} · Liquidez: ${cnt.liq} · Préstamos: ${cnt.p} · Objetivos: ${cnt.obj} · Snapshots: ${cnt.snap}`;renderCloudSection();}
 async function saveConfig(){CFG.moneda=document.getElementById('cfg-moneda').value;CFG.locale=document.getElementById('cfg-locale').value;CFG.usd=parseFloat(document.getElementById('cfg-usd').value)||1000;await saveConfigDB();}
 async function addCategoria(){const v=document.getElementById('cat-nueva').value.trim();if(v&&!CFG.categorias.includes(v)){CFG.categorias.push(v);await saveConfigDB();renderConfig();document.getElementById('cat-nueva').value='';}}
 async function removeCategoria(cat){CFG.categorias=CFG.categorias.filter(c=>c!==cat);await saveConfigDB();renderConfig();}
@@ -2674,6 +2679,210 @@ async function guardarRegistroRapido() {
   setTimeout(() => { fab.textContent = '+'; }, 1500);
 }
 
+// ─── SUPABASE / CLOUD SYNC ───────────────────────────────────────────────────
+const SUPA_URL = 'https://iiuxhwnojhizuxyjrofw.supabase.co';
+const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlpdXhod25vamhpenV4eWpyb2Z3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE5MzI3NzAsImV4cCI6MjA2NzUwODc3MH0.zxWLlJoH9UvN_y-ZwWAm5LNwjqe0gOuQ_JrI7s87T0k';
+
+let _supa = null; // cliente Supabase (lazy)
+let _supaSession = null; // sesión activa
+
+async function loadSupabase() {
+  if (_supa) return _supa;
+  await new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
+    s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+  _supa = window.supabase.createClient(SUPA_URL, SUPA_KEY);
+  // Restaurar sesión guardada
+  const { data: { session } } = await _supa.auth.getSession();
+  _supaSession = session;
+  return _supa;
+}
+
+function supaUser() { return _supaSession?.user || null; }
+
+async function supaLogin(email, password) {
+  const sb = await loadSupabase();
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) throw new Error(error.message);
+  _supaSession = data.session;
+  return data.user;
+}
+
+async function supaRegister(email, password) {
+  const sb = await loadSupabase();
+  const { data, error } = await sb.auth.signUp({ email, password });
+  if (error) throw new Error(error.message);
+  _supaSession = data.session;
+  return data.user;
+}
+
+async function supaLogout() {
+  if (!_supa) return;
+  await _supa.auth.signOut();
+  _supaSession = null;
+}
+
+async function supaResetPassword(email) {
+  const sb = await loadSupabase();
+  const { error } = await sb.auth.resetPasswordForEmail(email, {
+    redirectTo: window.location.href
+  });
+  if (error) throw new Error(error.message);
+}
+
+// Tablas sincronizadas y sus campos de Dexie
+const SYNC_TABLES = ['movimientos','tarjetas','inversiones','liquidez','prestamos','objetivos','snapshots','recurrentes','cuotas'];
+
+async function syncToCloud() {
+  const user = supaUser();
+  if (!user) return;
+  const sb = await loadSupabase();
+  for (const tabla of SYNC_TABLES) {
+    const rows = await db[tabla].toArray();
+    if (!rows.length) continue;
+    const payload = rows.map(r => ({ ...r, user_id: user.id, local_id: r.id }));
+    payload.forEach(r => { delete r.id; }); // Supabase genera su propio id
+    const { error } = await sb.from(tabla).upsert(payload, { onConflict: 'user_id,local_id' });
+    if (error) console.warn('sync error', tabla, error.message);
+  }
+}
+
+async function syncFromCloud() {
+  const user = supaUser();
+  if (!user) return;
+  const sb = await loadSupabase();
+  for (const tabla of SYNC_TABLES) {
+    const { data, error } = await sb.from(tabla).select('*').eq('user_id', user.id);
+    if (error || !data?.length) continue;
+    await db[tabla].clear();
+    const rows = data.map(r => { const o = { ...r }; o.id = r.local_id; delete o.user_id; delete o.local_id; return o; });
+    await db[tabla].bulkPut(rows);
+  }
+}
+
+async function renderCloudSection() {
+  const wrap = document.getElementById('cloud-section');
+  if (!wrap) return;
+  // Intentar restaurar sesión silenciosamente
+  try { await loadSupabase(); } catch(e) { /* sin red, ok */ }
+  const user = supaUser();
+  if (user) {
+    wrap.innerHTML = `
+      <div class="flex items-center gap-12 flex-wrap">
+        <div class="flex-1">
+          <div class="text-sm"><strong>Conectado como:</strong> ${user.email}</div>
+          <div class="text-xs text-muted mt-4">Tus datos se sincronizan automáticamente en la nube.</div>
+        </div>
+        <div class="flex gap-8 flex-wrap">
+          <button class="btn btn-ghost btn-sm" onclick="cloudSync('up')">⬆️ Subir datos</button>
+          <button class="btn btn-ghost btn-sm" onclick="cloudSync('down')">⬇️ Bajar datos</button>
+          <button class="btn btn-ghost btn-sm" onclick="cloudDesconectar()">🔓 Desconectar</button>
+        </div>
+      </div>
+      <div id="cloud-msg" style="margin-top:8px;font-size:12px"></div>`;
+  } else {
+    wrap.innerHTML = `
+      <div class="text-sm text-muted" style="margin-bottom:12px">Registrate o iniciá sesión para sincronizar tus datos entre dispositivos.</div>
+      <div class="flex gap-8 flex-wrap">
+        <button class="btn btn-primary btn-sm" onclick="openModal('modal-cloud')">🔑 Iniciar sesión / Registrarse</button>
+      </div>
+      <div id="cloud-msg" style="margin-top:8px;font-size:12px"></div>`;
+  }
+}
+
+async function cloudSync(dir) {
+  const msg = document.getElementById('cloud-msg');
+  if (msg) msg.innerHTML = '⏳ Sincronizando...';
+  try {
+    if (dir === 'up') await syncToCloud();
+    else { await syncFromCloud(); renderDashboard(); }
+    if (msg) msg.innerHTML = `<span style="color:var(--accent2)">✅ Listo — ${new Date().toLocaleTimeString('es-AR')}</span>`;
+  } catch(e) {
+    if (msg) msg.innerHTML = `<span style="color:var(--red)">⚠️ Error: ${e.message}</span>`;
+  }
+}
+
+async function cloudDesconectar() {
+  if (!confirm('¿Desconectar cuenta? Tus datos locales no se borran.')) return;
+  await supaLogout();
+  renderCloudSection();
+}
+
+async function cloudLoginSubmit() {
+  const email = document.getElementById('cloud-email').value.trim();
+  const password = document.getElementById('cloud-password').value;
+  const mode = document.getElementById('cloud-mode').value;
+  const msgEl = document.getElementById('cloud-modal-msg');
+  const btn = document.getElementById('cloud-submit-btn');
+  if (!email || !password) return msgEl.textContent = 'Completá email y contraseña.';
+  btn.disabled = true; btn.textContent = '⏳ Cargando...';
+  msgEl.textContent = '';
+  try {
+    if (mode === 'login') {
+      await supaLogin(email, password);
+    } else {
+      const user = await supaRegister(email, password);
+      if (!user) { msgEl.textContent = 'Revisá tu email para confirmar el registro.'; btn.disabled = false; btn.textContent = 'Continuar'; return; }
+    }
+    closeModal('modal-cloud');
+    renderCloudSection();
+    // Auto-subir datos al conectar
+    setTimeout(() => cloudSync('up'), 500);
+  } catch(e) {
+    msgEl.textContent = '⚠️ ' + e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Continuar';
+  }
+}
+
+async function cloudResetPass() {
+  const email = document.getElementById('cloud-email').value.trim();
+  if (!email) return document.getElementById('cloud-modal-msg').textContent = 'Ingresá tu email primero.';
+  try {
+    await supaResetPassword(email);
+    document.getElementById('cloud-modal-msg').textContent = '✅ Te enviamos un email para restablecer tu contraseña.';
+  } catch(e) {
+    document.getElementById('cloud-modal-msg').textContent = '⚠️ ' + e.message;
+  }
+}
+
 </script>
+
+<!-- Modal cloud login/registro -->
+<div class="modal-overlay" id="modal-cloud">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">☁️ Cuenta en la nube</div>
+      <button class="modal-close" onclick="closeModal('modal-cloud')">×</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Modo</label>
+      <select class="form-input" id="cloud-mode">
+        <option value="login">Iniciar sesión</option>
+        <option value="register">Crear cuenta nueva</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Email</label>
+      <input class="form-input" type="email" id="cloud-email" placeholder="tu@email.com">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Contraseña</label>
+      <input class="form-input" type="password" id="cloud-password" placeholder="Mínimo 6 caracteres">
+    </div>
+    <div id="cloud-modal-msg" style="font-size:13px;color:var(--red);min-height:18px;margin-bottom:8px"></div>
+    <div class="flex gap-8">
+      <button id="cloud-submit-btn" class="btn btn-primary w-full" onclick="cloudLoginSubmit()">Continuar</button>
+      <button class="btn btn-ghost" onclick="closeModal('modal-cloud')">Cancelar</button>
+    </div>
+    <div style="margin-top:12px;text-align:center">
+      <button class="btn btn-ghost btn-sm" onclick="cloudResetPass()">¿Olvidaste tu contraseña?</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
