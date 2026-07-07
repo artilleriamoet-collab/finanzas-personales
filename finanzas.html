@@ -2455,10 +2455,12 @@ async function calcScore(pre) {
 // ─── ANÁLISIS ────────────────────────────────────────────────────────────────
 // ─── IPC / INFLACIÓN ──────────────────────────────────────────────────────────
 let _ipcMap = null; // { 'YYYY-MM': índice }
+let _ipcError = null; // cachea el último error para no re-fetchear en cada clic
 let _modoReal = false;
 
 async function fetchInflacion() {
   if (_ipcMap) return _ipcMap;
+  if (_ipcError) throw _ipcError;
   try {
     const res = await fetch('/api/inflacion');
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -2469,9 +2471,11 @@ async function fetchInflacion() {
         _ipcMap[fecha.slice(0, 7)] = valor; // 'YYYY-MM' → índice
       }
     });
+    _ipcError = null;
     return _ipcMap;
   } catch (e) {
     _ipcMap = null;
+    _ipcError = e;
     throw e;
   }
 }
