@@ -2680,14 +2680,20 @@ async function guardarRegistroRapido() {
 }
 
 // ─── SUPABASE / CLOUD SYNC ───────────────────────────────────────────────────
-const SUPA_URL = 'https://iiuxhwnojhizuxyjrofw.supabase.co';
-const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlpdXhod25vamhpenV4eWpyb2Z3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE5MzI3NzAsImV4cCI6MjA2NzUwODc3MH0.zxWLlJoH9UvN_y-ZwWAm5LNwjqe0gOuQ_JrI7s87T0k';
-
+// Credenciales Supabase — se obtienen del servidor, nunca hardcodeadas aquí
+let _supaConfig = null;
 let _supa = null; // cliente Supabase (lazy)
 let _supaSession = null; // sesión activa
 
 async function loadSupabase() {
   if (_supa) return _supa;
+  // 1. Obtener credenciales del servidor
+  if (!_supaConfig) {
+    const r = await fetch('/api/supabase-config');
+    if (!r.ok) throw new Error('No se pudo obtener la configuración de Supabase.');
+    _supaConfig = await r.json();
+  }
+  // 2. Cargar SDK con fallback de CDN
   const CDNS = [
     'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js',
     'https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js',
@@ -2707,7 +2713,7 @@ async function loadSupabase() {
     } catch(e) { /* probar siguiente CDN */ }
   }
   if (!loaded) throw new Error('No se pudo cargar el SDK de Supabase. Verificá tu conexión a internet.');
-  _supa = window.supabase.createClient(SUPA_URL, SUPA_KEY);
+  _supa = window.supabase.createClient(_supaConfig.url, _supaConfig.key);
   // Restaurar sesión guardada
   const { data: { session } } = await _supa.auth.getSession();
   _supaSession = session;
