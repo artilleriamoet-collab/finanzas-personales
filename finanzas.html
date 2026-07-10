@@ -2688,12 +2688,25 @@ let _supaSession = null; // sesión activa
 
 async function loadSupabase() {
   if (_supa) return _supa;
-  await new Promise((res, rej) => {
-    const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
-    s.onload = res; s.onerror = rej;
-    document.head.appendChild(s);
-  });
+  const CDNS = [
+    'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js',
+    'https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js',
+  ];
+  let loaded = false;
+  for (const src of CDNS) {
+    try {
+      await new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = src;
+        s.onload = res;
+        s.onerror = rej;
+        document.head.appendChild(s);
+      });
+      loaded = true;
+      break;
+    } catch(e) { /* probar siguiente CDN */ }
+  }
+  if (!loaded) throw new Error('No se pudo cargar el SDK de Supabase. Verificá tu conexión a internet.');
   _supa = window.supabase.createClient(SUPA_URL, SUPA_KEY);
   // Restaurar sesión guardada
   const { data: { session } } = await _supa.auth.getSession();
